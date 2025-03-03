@@ -5,6 +5,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	maxContentLength = 3000
+	truncationSuffix = "... [content truncated]"
+)
+
 func main() {
 	var rootCmd = &cobra.Command{
 		Use:   "quill",
