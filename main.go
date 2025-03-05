@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/ledongthuc/pdf"
 	openai "github.com/sashabaranov/go-openai"
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -88,7 +88,9 @@ func generateOpenAITitle(content, apiKey string) (string, error) {
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role: openai.ChatMessageRoleSystem,
-					Content: "You are a professional document curator..."",
+					Content: "You are a professional document curator. " +
+						"Generate a concise, descriptive title for the following content. " +
+						"Respond only with the title itself, no additional text.",
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
