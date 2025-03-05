@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"github.com/spf13/cobra"
 	"os"
 	"strings"
+
+	"github.com/spf13/cobra"
+	"github.com/ledongthuc/pdf"
+	openai "github.com/sashabaranov/go-openai"
 )
 
 const (
@@ -71,4 +75,28 @@ func extractPDFContent(path string) (string, error) {
 	}
 
 	return content.String(), nil
+}
+
+func generateOpenAITitle(content, apiKey string) (string, error) {
+	content = truncateContent(content)
+	client := openai.NewClient(apiKey)
+
+	resp, err := client.CreateChatCompletion(
+		context.Background(),
+		openai.ChatCompletionRequest{
+			Model: openai.GPT3Dot5Turbo,
+			Messages: []openai.ChatCompletionMessage{
+				{
+					Role: openai.ChatMessageRoleSystem,
+					Content: "You are a professional document curator..."",
+				},
+				{
+					Role:    openai.ChatMessageRoleUser,
+					Content: content,
+				},
+			},
+			Temperature: 0.3,
+		},
+	)
+	// ... (error handling and response processing)
 }
