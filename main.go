@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/spf13/cobra"
 	"os"
+	"strings"
 )
 
 const (
@@ -46,4 +47,28 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+}
+
+func extractPDFContent(path string) (string, error) {
+	file, reader, err := pdf.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to open PDF: %w", err)
+	}
+	defer file.Close()
+
+	var content strings.Builder
+	for i := 1; i <= reader.NumPage(); i++ {
+		page := reader.Page(i)
+		if page.V.IsNull() {
+			continue
+		}
+
+		text, err := page.GetPlainText(nil)
+		if err != nil {
+			return "", fmt.Errorf("page %d text extraction failed: %w", i, err)
+		}
+		content.WriteString(text)
+	}
+
+	return content.String(), nil
 }
