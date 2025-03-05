@@ -37,4 +37,7 @@ func main() {
 		},
 	}
 
+	// Configure flags
+	rootCmd.Flags().StringVarP(&apiKey, "key", "k", "", "OpenAI API key (default: $OPENAI_API_KEY)")
+	rootCmd.MarkFlagRequired("key")
 }
