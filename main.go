@@ -98,5 +98,26 @@ func generateOpenAITitle(content, apiKey string) (string, error) {
 			Temperature: 0.3,
 		},
 	)
-	// ... (error handling and response processing)
+
+	if err != nil {
+		return "", fmt.Errorf("OpenAI API error: %w", err)
+	}
+
+	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
+		return "", fmt.Errorf("empty response from OpenAI API")
+	}
+
+	return cleanTitle(resp.Choices[0].Message.Content), nil
+}
+
+func truncateContent(content string) string {
+	if len(content) > maxContentLength {
+		return content[:maxContentLength-len(truncationSuffix)] + truncationSuffix
+	}
+	return content
+}
+
+func cleanTitle(title string) string {
+	title = strings.Trim(title, "\"'“”‘’ \t\n")
+	return strings.ReplaceAll(title, "\n", " ")
 }
