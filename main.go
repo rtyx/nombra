@@ -54,9 +54,6 @@ func main() {
 	// Configure flags
 	rootCmd.Flags().StringVarP(&apiKey, "key", "k", "", "OpenAI API key (default: $OPENAI_API_KEY)")
 
-	// Mark the key flag as required
-	rootCmd.MarkFlagRequired("key")
-
 	// Execute the command
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
