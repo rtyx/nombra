@@ -245,10 +245,8 @@ func generateOpenAITitle(content, apiKey string) (string, error) {
 			Model: openai.GPT3Dot5Turbo,
 			Messages: []openai.ChatCompletionMessage{
 				{
-					Role: openai.ChatMessageRoleSystem,
-					Content: "You are a professional document curator. " +
-						"Generate a concise, descriptive title for the following content. " +
-						"Respond only with the title itself in the same language as the content, no additional text.",
+					Role:    openai.ChatMessageRoleSystem,
+					Content: "You are a professional document curator. Generate a concise, descriptive title for the following content that works well as a filename. If a date is relevant, start with it in the format YYYY.MM.DD, followed by a dash. Continue with the author or entity, the purpose of the document, and the recipient, keeping the filename relatively short and not joining words. If no date is present, start with the author or entity. Omit the file extension. Respond only with the title itself in the same language as the content, no additional text.",
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
