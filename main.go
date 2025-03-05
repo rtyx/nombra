@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"strings"
-
 	"github.com/ledongthuc/pdf"
 	openai "github.com/sashabaranov/go-openai"
 	"github.com/spf13/cobra"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 )
 
 const (
@@ -62,6 +65,18 @@ func main() {
 }
 
 func extractPDFContent(path string) (string, error) {
+	// First try standard text extraction
+	text, err := extractTextFromPDF(path)
+	if err == nil && text != "" {
+		return text, nil
+	}
+
+	// Fallback to OCR if text extraction failed
+	log.Println("Standard text extraction failed, attempting OCR...")
+	return extractTextViaOCR(path)
+}
+
+func extractTextFromPDF(path string) (string, error) {
 	file, reader, err := pdf.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("failed to open PDF: %w", err)
@@ -69,7 +84,12 @@ func extractPDFContent(path string) (string, error) {
 	defer file.Close()
 
 	var content strings.Builder
-	for i := 1; i <= reader.NumPage(); i++ {
+	totalPages := reader.NumPage()
+	if totalPages == 0 {
+		return "", fmt.Errorf("PDF appears to be empty")
+	}
+
+	for i := 1; i <= totalPages; i++ {
 		page := reader.Page(i)
 		if page.V.IsNull() {
 			continue
@@ -79,14 +99,70 @@ func extractPDFContent(path string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("page %d text extraction failed: %w", i, err)
 		}
-		content.WriteString(text)
+		content.WriteString(strings.TrimSpace(text))
+	}
+
+	if content.Len() == 0 {
+		return "", fmt.Errorf("no extractable text found in PDF")
+	}
+
+	return content.String(), nil
+}
+
+func extractTextViaOCR(pdfPath string) (string, error) {
+	tempDir, err := os.MkdirTemp("", "quill-ocr")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Convert PDF to images
+	cmd := exec.Command("pdftoppm", "-png", pdfPath, filepath.Join(tempDir, "page"))
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("pdftoppm failed: %w", err)
+	}
+
+	// Process each page image
+	var content strings.Builder
+	pages, _ := filepath.Glob(filepath.Join(tempDir, "page-*.png"))
+
+	if len(pages) == 0 {
+		return "", fmt.Errorf("no pages converted from PDF")
+	}
+
+	for _, page := range pages {
+		// Run OCR on each page
+		cmd := exec.Command("tesseract", page, "stdout")
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Run(); err != nil {
+			return "", fmt.Errorf("tesseract failed: %w", err)
+		}
+
+		content.WriteString(out.String())
+		content.WriteString("\n")
+	}
+
+	if content.Len() == 0 {
+		return "", fmt.Errorf("OCR extracted no text")
 	}
 
 	return content.String(), nil
 }
 
 func generateOpenAITitle(content, apiKey string) (string, error) {
+	if content == "" {
+		return "", fmt.Errorf("empty content provided for title generation")
+	}
+
 	content = truncateContent(content)
+
+	// Add debug logging
+	log.Printf("Sending content to OpenAI (length: %d characters)", len(content))
+
 	client := openai.NewClient(apiKey)
 
 	resp, err := client.CreateChatCompletion(
@@ -98,7 +174,7 @@ func generateOpenAITitle(content, apiKey string) (string, error) {
 					Role: openai.ChatMessageRoleSystem,
 					Content: "You are a professional document curator. " +
 						"Generate a concise, descriptive title for the following content. " +
-						"Respond only with the title itself, no additional text.",
+						"Respond only with the title itself in the same language as the content, no additional text.",
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
