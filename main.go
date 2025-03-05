@@ -24,6 +24,15 @@ func main() {
 		Short: "Generate titles for PDF documents using AI",
 		Long:  "A CLI tool that analyzes PDF content and generates appropriate titles using OpenAI's API",
 		Args:  cobra.ExactArgs(1),
+		PreRun: func(cmd *cobra.Command, args []string) {
+			if apiKey == "" {
+				apiKey = os.Getenv("OPENAI_API_KEY")
+			}
+			if apiKey == "" {
+				fmt.Println("Error: API key required. Use --key or set OPENAI_API_KEY")
+				os.Exit(1)
+			}
+		},
 		Run: func(cmd *cobra.Command, args []string) {
 			filePath := args[0]
 			textContent, err := extractPDFContent(filePath)
@@ -46,11 +55,7 @@ func main() {
 	rootCmd.Flags().StringVarP(&apiKey, "key", "k", "", "OpenAI API key (default: $OPENAI_API_KEY)")
 
 	// Mark the key flag as required
-	err := rootCmd.MarkFlagRequired("key")
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+	rootCmd.MarkFlagRequired("key")
 
 	// Execute the command
 	if err := rootCmd.Execute(); err != nil {
