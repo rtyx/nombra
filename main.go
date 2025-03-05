@@ -11,12 +11,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
 const (
-	maxContentLength = 3000
-	truncationSuffix = "... [content truncated]"
+	maxFilenameLength = 120
+	maxContentLength  = 3000
+	truncationSuffix  = "... [content truncated]"
+	sanitizeRegex     = `[<>:"\/\\|?*]`
 )
 
 func main() {
@@ -50,7 +53,15 @@ func main() {
 				os.Exit(1)
 			}
 
-			fmt.Printf("\nSuggested title: %s\n\n", title)
+			fmt.Printf("\nGenerated title: %s\n\n", title)
+
+			newPath, err := safeRenameFile(filePath, title)
+			if err != nil {
+				fmt.Printf("Renaming failed: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Printf("Successfully renamed:\n  %s\n  → %s\n\n", filepath.Base(filePath), filepath.Base(newPath))
 		},
 	}
 
@@ -61,6 +72,69 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
+	}
+}
+
+func safeRenameFile(originalPath, title string) (string, error) {
+	// Sanitize title and prepare new filename
+	cleanTitle := sanitizeFilename(title)
+	if cleanTitle == "" {
+		return "", fmt.Errorf("generated title results in invalid filename")
+	}
+
+	dir := filepath.Dir(originalPath)
+	ext := filepath.Ext(originalPath)
+	baseName := cleanTitle + ext
+
+	// Ensure filename length is filesystem-safe
+	if len(baseName) > maxFilenameLength {
+		baseName = baseName[:maxFilenameLength-len(ext)] + ext
+	}
+
+	newPath := filepath.Join(dir, baseName)
+
+	// Handle existing files with same name
+	if _, err := os.Stat(newPath); err == nil {
+		newPath = generateUniqueName(dir, cleanTitle, ext)
+	}
+
+	// Perform actual rename
+	if err := os.Rename(originalPath, newPath); err != nil {
+		return "", fmt.Errorf("could not rename file: %w", err)
+	}
+
+	return newPath, nil
+}
+
+func sanitizeFilename(title string) string {
+	// Remove invalid characters
+	reg := regexp.MustCompile(sanitizeRegex)
+	clean := reg.ReplaceAllString(title, "")
+
+	// Trim whitespace and truncate
+	clean = strings.TrimSpace(clean)
+	if len(clean) > maxFilenameLength {
+		clean = clean[:maxFilenameLength]
+	}
+
+	// Handle cases where title becomes empty
+	if clean == "" {
+		return "untitled-document"
+	}
+
+	return clean
+}
+
+func generateUniqueName(dir, baseName, ext string) string {
+	counter := 1
+	pattern := filepath.Join(dir, baseName+"-%d"+ext)
+
+	for {
+		candidate := fmt.Sprintf(pattern, counter)
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
+		counter++
 	}
 }
 
