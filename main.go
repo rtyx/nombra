@@ -246,7 +246,7 @@ func generateOpenAITitle(content, apiKey string) (string, error) {
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,
-					Content: "You are a professional document curator. Generate a concise, descriptive title for the following content that works well as a filename. If a date is relevant, start with it in the format YYYY.MM.DD, followed by a dash. Continue with the author or entity, the purpose of the document, and the recipient, keeping the filename relatively short and not joining words. If no date is present, start with the author or entity. Omit the file extension. Respond only with the title itself in the same language as the content, no additional text.",
+					Content: "You are a professional document curator. Carefully check the content for any relevant dates and ensure to include it in the filename if applicable. Start the filename with the date in the format YYYY.MM.DD, followed by a dash. Continue with the author or entity, the purpose of the document, and the recipient, while keeping the filename relatively short and not joining words. If the content does not include a specific date, start with the author or entity. Omit the file extension. Respond only with the title itself in the same language as the content, no additional text.",
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
