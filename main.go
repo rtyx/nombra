@@ -17,12 +17,15 @@ import (
 
 const (
 	maxFilenameLength = 120
-	maxContentLength  = 3000
 	truncationSuffix  = "... [content truncated]"
 	sanitizeRegex     = `[<>:"\/\\|?*]`
 )
 
-var verbose bool
+var (
+	verbose          bool
+	maxContentLength = 3000
+	ocr              bool
+)
 
 func main() {
 	var apiKey string
@@ -73,6 +76,8 @@ func main() {
 
 	// Configure flags
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose logging")
+	rootCmd.PersistentFlags().BoolVarP(&ocr, "ocr", "o", false, "Force OCR text extraction")
+	rootCmd.Flags().IntVar(&maxContentLength, "max-content-length", 3000, "Maximum content length for processing")
 	rootCmd.Flags().StringVarP(&apiKey, "key", "k", "", "OpenAI API key (default: $OPENAI_API_KEY)")
 
 	// Execute the command
@@ -146,6 +151,11 @@ func generateUniqueName(dir, baseName, ext string) string {
 }
 
 func extractPDFContent(path string) (string, error) {
+	// Force OCR if specified
+	if ocr {
+		return extractTextViaOCR(path)
+	}
+
 	// First try standard text extraction
 	text, err := extractTextFromPDF(path)
 	if err == nil && text != "" {
@@ -185,6 +195,11 @@ func extractTextFromPDF(path string) (string, error) {
 
 	if content.Len() == 0 {
 		return "", fmt.Errorf("no extractable text found in PDF")
+	}
+
+	// If the extraction provides a long string of text with no spaces in it, throw an error
+	if len(content.String()) > 500 && !strings.Contains(content.String(), " ") {
+		return "", fmt.Errorf("text extraction failed: no spaces found in extracted text")
 	}
 
 	return content.String(), nil
