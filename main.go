@@ -31,7 +31,7 @@ func main() {
 	var apiKey string
 
 	rootCmd := &cobra.Command{
-		Use:   "quill [PDF file]",
+		Use:   "nombra [PDF file]",
 		Short: "Generate titles for PDF documents using AI",
 		Long:  "A CLI tool that analyzes PDF content and generates appropriate titles using OpenAI's API",
 		Args:  cobra.ExactArgs(1),
@@ -206,7 +206,7 @@ func extractTextFromPDF(path string) (string, error) {
 }
 
 func extractTextViaOCR(pdfPath string) (string, error) {
-	tempDir, err := os.MkdirTemp("", "quill-ocr")
+	tempDir, err := os.MkdirTemp("", "nombra-ocr")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
