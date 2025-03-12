@@ -22,6 +22,8 @@ const (
 	sanitizeRegex     = `[<>:"\/\\|?*]`
 )
 
+var verbose bool
+
 func main() {
 	var apiKey string
 
@@ -40,6 +42,10 @@ func main() {
 			}
 		},
 		Run: func(cmd *cobra.Command, args []string) {
+			if verbose {
+				log.Println("Verbose mode enabled")
+			}
+
 			filePath := args[0]
 			textContent, err := extractPDFContent(filePath)
 			if err != nil {
@@ -66,6 +72,7 @@ func main() {
 	}
 
 	// Configure flags
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose logging")
 	rootCmd.Flags().StringVarP(&apiKey, "key", "k", "", "OpenAI API key (default: $OPENAI_API_KEY)")
 
 	// Execute the command
@@ -237,6 +244,12 @@ func generateOpenAITitle(content, apiKey string) (string, error) {
 	// Add debug logging
 	log.Printf("Sending content to OpenAI (length: %d characters)", len(content))
 
+	// If verbose logging is enabled, print the content
+	if verbose {
+		log.Println("Content:")
+		log.Println(content)
+	}
+
 	client := openai.NewClient(apiKey)
 
 	resp, err := client.CreateChatCompletion(
@@ -246,7 +259,7 @@ func generateOpenAITitle(content, apiKey string) (string, error) {
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,
-					Content: "Generate a title in the format YYYY.MM.DD - Entity - Document Description - Recipient. Make sure each section is separated by ‘ - ’ (a dash with a single space on either side) and do not join words together. Respond with only the title and nothing else. If there's no relevant date in the document, you can omit it.",
+					Content: "You are a professional document curator. Analyze the provided document for any dates in the format YYYY.MM.DD that indicate the document’s creation or signature date. If one or more valid dates are found, use the earliest date and generate a title in the following format: 'YYYY.MM.DD - Entity - Document Description - Recipient'. If no valid date is found, omit the date and generate the title as 'Entity - Document Description - Recipient'. Likewise, if the document lacks a recipient, omit that segment entirely—do not use any placeholder text such as 'Recipient'. Respond with only the title. For example, if the document contains the date '2024.03.31', the title should be '2024.03.31 - Rafael Toledano Illán - Lohnabrechnung - Zürich'. If no date is found, then it should be 'Rafael Toledano Illán - Lohnabrechnung - Zürich'.",
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
