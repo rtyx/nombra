@@ -18,15 +18,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/ledongthuc/pdf"
-	openai "github.com/sashabaranov/go-openai"
-	"github.com/spf13/cobra"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/ledongthuc/pdf"
+	openai "github.com/sashabaranov/go-openai"
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -343,7 +344,7 @@ func truncateContent(content string) string {
 // normalizing spacing around dashes, and ensuring proper text formatting.
 func cleanTitle(title string) string {
 	// Remove extraneous quotes and whitespace
-	title = strings.Trim(title, "\"'""'' \t\n")
+	title = strings.Trim(title, "\"'\"'' \t\n")
 
 	// Replace newlines with a single space
 	title = strings.ReplaceAll(title, "\n", " ")
