@@ -39,6 +39,7 @@ const (
 var (
 	verbose          bool
 	maxContentLength = 3000
+	minContentLength = 10
 	ocr              bool
 )
 
@@ -96,6 +97,7 @@ func main() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose logging")
 	rootCmd.PersistentFlags().BoolVarP(&ocr, "ocr", "o", false, "Force OCR text extraction")
 	rootCmd.Flags().IntVarP(&maxContentLength, "max-content-length", "m", 3000, "Maximum content length for processing")
+	rootCmd.Flags().IntVarP(&minContentLength, "min-content-length", "n", 10, "Minimum content length required for processing")
 	rootCmd.Flags().StringVarP(&apiKey, "key", "k", "", "OpenAI API key (default: $OPENAI_API_KEY)")
 
 	// Execute the command
@@ -175,24 +177,67 @@ func generateUniqueName(dir, baseName, ext string) string {
 	}
 }
 
+// validateContentLength checks if the content meets the minimum length requirement
+func validateContentLength(content string) error {
+	trimmedLength := len(strings.TrimSpace(content))
+	if trimmedLength < minContentLength {
+		return fmt.Errorf("extracted content length (%d) is below minimum required length (%d)", trimmedLength, minContentLength)
+	}
+	return nil
+}
+
 // extractPDFContent extracts text from the specified PDF file.
 // It first attempts to extract text using a standard method.
 // If that fails or produces empty content, it falls back to OCR-based extraction.
 func extractPDFContent(path string) (string, error) {
-	// Force OCR if specified
-	if ocr {
-		return extractTextViaOCR(path)
+	// Define extraction methods
+	extractors := []struct {
+		name string
+		fn   func(string) (string, error)
+	}{
+		{"standard", extractTextFromPDF},
+		{"OCR", extractTextViaOCR},
 	}
 
-	// First try standard text extraction
-	text, err := extractTextFromPDF(path)
-	if err == nil && text != "" {
+	// If OCR is forced, only use OCR
+	if ocr {
+		text, err := extractTextViaOCR(path)
+		if err != nil {
+			return "", err
+		}
+		if err := validateContentLength(text); err != nil {
+			return "", err
+		}
 		return text, nil
 	}
 
-	// Fallback to OCR if text extraction failed
-	log.Println("Standard text extraction failed, attempting OCR...")
-	return extractTextViaOCR(path)
+	// Try each extraction method
+	var lastErr error
+	for _, extractor := range extractors {
+		if verbose {
+			log.Printf("Attempting %s text extraction...", extractor.name)
+		}
+
+		text, err := extractor.fn(path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if text != "" {
+			if err := validateContentLength(text); err != nil {
+				lastErr = err
+				continue
+			}
+			return text, nil
+		}
+	}
+
+	// If we get here, all extraction methods failed
+	if lastErr != nil {
+		return "", fmt.Errorf("all text extraction methods failed: %w", lastErr)
+	}
+	return "", fmt.Errorf("no text could be extracted from the PDF")
 }
 
 // extractTextFromPDF extracts plain text from the PDF using the pdf library.
