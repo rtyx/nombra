@@ -45,7 +45,8 @@ export OPENAI_API_KEY=your_api_key
 ./nombra myfile.pdf
 ```
 
-### Enabling OCR for scanned PDFs
+### Forcing OCR
+While nombra automatically opts for OCR when needed, you can also force it:
 ```sh
 ./nombra myfile.pdf --ocr
 ```
