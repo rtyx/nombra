@@ -94,7 +94,7 @@ func main() {
 	// Configure flags
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose logging")
 	rootCmd.PersistentFlags().BoolVarP(&ocr, "ocr", "o", false, "Force OCR text extraction")
-	rootCmd.Flags().IntVar(&maxContentLength, "max-content-length", 3000, "Maximum content length for processing")
+	rootCmd.Flags().IntVarP(&maxContentLength, "max-content-length", "m", 3000, "Maximum content length for processing")
 	rootCmd.Flags().StringVarP(&apiKey, "key", "k", "", "OpenAI API key (default: $OPENAI_API_KEY)")
 
 	// Execute the command
@@ -308,7 +308,7 @@ func generateOpenAITitle(content, apiKey string) (string, error) {
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,
-					Content: "You are a professional document curator. Analyze the provided document for any dates in the format YYYY.MM.DD that indicate the document’s creation or signature date. If one or more valid dates are found, use the latest date and generate a title in the following format: 'YYYY.MM.DD - Entity - Document Description - Recipient'. If no valid date is found, omit the date and generate the title as 'Entity - Document Description - Recipient'. Likewise, if the document lacks a recipient, omit that segment entirely—do not use any placeholder text such as 'Recipient'. Respond with only the title. For example, if the document contains the date '2024.03.31', the title should be '2024.03.31 - Rafael Toledano Illán - Lohnabrechnung - Zürich'. If no date is found, then it should be 'Rafael Toledano Illán - Lohnabrechnung - Zürich'.",
+					Content: "You are a professional document curator. Analyze the provided document for any dates in the format YYYY.MM.DD that indicate the document's creation or signature date. If one or more valid dates are found, use the latest date and generate a title in the following format: 'YYYY.MM.DD - Entity - Document Description - Recipient'. If no valid date is found, omit the date and generate the title as 'Entity - Document Description - Recipient'. Likewise, if the document lacks a recipient, omit that segment entirely—do not use any placeholder text such as 'Recipient'. Respond with only the title. For example, if the document contains the date '2024.03.31', the title should be '2024.03.31 - Rafael Toledano Illán - Lohnabrechnung - Zürich'. If no date is found, then it should be 'Rafael Toledano Illán - Lohnabrechnung - Zürich'.",
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
@@ -343,7 +343,7 @@ func truncateContent(content string) string {
 // normalizing spacing around dashes, and ensuring proper text formatting.
 func cleanTitle(title string) string {
 	// Remove extraneous quotes and whitespace
-	title = strings.Trim(title, "\"'“”‘’ \t\n")
+	title = strings.Trim(title, "\"'""'' \t\n")
 
 	// Replace newlines with a single space
 	title = strings.ReplaceAll(title, "\n", " ")
