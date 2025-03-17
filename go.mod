@@ -1,4 +1,4 @@
-module nombra
+module github.com/rtyx/nombra
 
 go 1.24.0
 
