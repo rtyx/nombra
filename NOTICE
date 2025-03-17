@@ -1,0 +1,19 @@
+NOTICE
+
+This software, developed by Rafael Toledano Illán (rtyx), is licensed under the Apache License, Version 2.0.
+
+See the accompanying LICENSE file or visit:
+    http://www.apache.org/licenses/LICENSE-2.0
+
+### Third-Party Components
+This software incorporates third-party libraries, each subject to its own license:
+  • **github.com/ledongthuc/pdf** – BSD-3-Clause License
+  • **github.com/sashabaranov/go-openai** – Apache License 2.0
+  • **github.com/spf13/cobra** – Apache License 2.0
+
+For full license texts of these components, refer to their respective repositories or the documentation provided in this software package.
+
+---
+
+This NOTICE file helps in compliance with the **Apache 2.0 attribution requirements**.
+Let me know if you want any adjustments!
