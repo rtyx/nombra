@@ -12,6 +12,15 @@ furnished to do so, subject to the following conditions:
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 
+Third-Party Components:
+This Software makes use of third-party libraries which are governed by their
+own licenses. Notably, it includes:
+  • github.com/ledongthuc/pdf – BSD-3-Clause License
+  • github.com/sashabaranov/go-openai – Apache License 2.0
+  • github.com/spf13/cobra – Apache License 2.0
+
+A complete list of third-party licenses is provided in the accompanying NOTICE file.
+
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
