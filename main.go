@@ -27,6 +27,9 @@ var (
 	ocr              bool
 )
 
+// main initializes and executes the CLI command for generating a title for a PDF file.
+// It sets up the command line flags, validates the API key, extracts content from the PDF,
+// generates a title using OpenAI's API, and finally renames the file based on the title.
 func main() {
 	var apiKey string
 
@@ -87,6 +90,9 @@ func main() {
 	}
 }
 
+// safeRenameFile renames the original file based on the generated title.
+// It sanitizes the title to form a valid filename, ensures the filename length is safe,
+// and handles name collisions by generating a unique filename.
 func safeRenameFile(originalPath, title string) (string, error) {
 	// Sanitize title and prepare new filename
 	cleanTitle := sanitizeFilename(title)
@@ -118,6 +124,8 @@ func safeRenameFile(originalPath, title string) (string, error) {
 	return newPath, nil
 }
 
+// sanitizeFilename removes any invalid characters from the title and trims whitespace.
+// It ensures that the resulting string is safe to use as a filename.
 func sanitizeFilename(title string) string {
 	// Remove invalid characters
 	reg := regexp.MustCompile(sanitizeRegex)
@@ -137,6 +145,8 @@ func sanitizeFilename(title string) string {
 	return clean
 }
 
+// generateUniqueName creates a unique filename by appending an incremental counter
+// to the base name until an unused filename is found in the specified directory.
 func generateUniqueName(dir, baseName, ext string) string {
 	counter := 1
 	pattern := filepath.Join(dir, baseName+"-%d"+ext)
@@ -150,6 +160,9 @@ func generateUniqueName(dir, baseName, ext string) string {
 	}
 }
 
+// extractPDFContent extracts text from the specified PDF file.
+// It first attempts to extract text using a standard method.
+// If that fails or produces empty content, it falls back to OCR-based extraction.
 func extractPDFContent(path string) (string, error) {
 	// Force OCR if specified
 	if ocr {
@@ -167,6 +180,8 @@ func extractPDFContent(path string) (string, error) {
 	return extractTextViaOCR(path)
 }
 
+// extractTextFromPDF extracts plain text from the PDF using the pdf library.
+// It iterates through all pages, concatenates the extracted text, and performs basic validations.
 func extractTextFromPDF(path string) (string, error) {
 	file, reader, err := pdf.Open(path)
 	if err != nil {
@@ -205,6 +220,8 @@ func extractTextFromPDF(path string) (string, error) {
 	return content.String(), nil
 }
 
+// extractTextViaOCR extracts text from a PDF by converting each page to an image and running OCR on them.
+// It uses external tools: 'pdftoppm' to convert the PDF to PNG images and 'tesseract' to perform OCR.
 func extractTextViaOCR(pdfPath string) (string, error) {
 	tempDir, err := os.MkdirTemp("", "nombra-ocr")
 	if err != nil {
@@ -249,6 +266,9 @@ func extractTextViaOCR(pdfPath string) (string, error) {
 	return content.String(), nil
 }
 
+// generateOpenAITitle sends the extracted PDF content to OpenAI's Chat Completion API
+// to generate an appropriate title based on specific formatting rules.
+// It then cleans the returned title to ensure proper formatting.
 func generateOpenAITitle(content, apiKey string) (string, error) {
 	if content == "" {
 		return "", fmt.Errorf("empty content provided for title generation")
@@ -296,6 +316,8 @@ func generateOpenAITitle(content, apiKey string) (string, error) {
 	return cleanTitle(resp.Choices[0].Message.Content), nil
 }
 
+// truncateContent shortens the input content if it exceeds the maximum allowed length,
+// appending a suffix to indicate that the content has been truncated.
 func truncateContent(content string) string {
 	if len(content) > maxContentLength {
 		return content[:maxContentLength-len(truncationSuffix)] + truncationSuffix
@@ -303,6 +325,8 @@ func truncateContent(content string) string {
 	return content
 }
 
+// cleanTitle cleans and formats the generated title by removing extraneous quotes and whitespace,
+// normalizing spacing around dashes, and ensuring proper text formatting.
 func cleanTitle(title string) string {
 	// Remove extraneous quotes and whitespace
 	title = strings.Trim(title, "\"'“”‘’ \t\n")
