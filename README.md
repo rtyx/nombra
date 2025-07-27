@@ -13,7 +13,7 @@ Nombra is a CLI tool that analyzes the content of PDF documents and generates me
 ## Installation
 
 ### Prerequisites
-- Go 1.18 or later
+- Go 1.24 or later
 - OpenAI API Key (required for AI-generated titles)
 - Optional: `tesseract-ocr` and `pdftoppm` for OCR functionality
 
