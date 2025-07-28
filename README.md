@@ -23,9 +23,30 @@ Nombra is a CLI tool that analyzes the content of PDF documents and generates me
 git clone https://github.com/YOUR_USERNAME/nombra.git
 cd nombra
 
-# Build the binary
-go build -o nombra
+# Build the binary with version information
+go build -ldflags="-X main.version=$(git rev-parse --short HEAD)" -o nombra
 ```
+
+### Make Nombra a Global Command
+To use `nombra` from anywhere in your system, move the built binary to a directory included in your `PATH`, such as `/usr/local/bin`:
+
+```sh
+sudo mv nombra /usr/local/bin/
+```
+
+You can now run `nombra` from any directory:
+
+```sh
+nombra myfile.pdf
+```
+
+If `/usr/local/bin` is not in your `PATH`, you can check your `PATH` with:
+
+```sh
+echo $PATH
+```
+
+And add it to your shell configuration if needed.
 
 ## Usage
 
@@ -62,6 +83,31 @@ different model with the `--model` flag:
 ```sh
 ./nombra myfile.pdf --model gpt-4-turbo
 ```
+
+### Checking the Version
+Display the Git commit the binary was built from:
+```sh
+./nombra --version
+```
+
+### Adjusting Content Length
+You can control how much text is sent to the language model. The
+`--max-content-length` flag specifies the maximum number of characters that will
+be included when generating a title. Experimenting with this value can help
+strike a balance between providing enough context and keeping requests small:
+
+```sh
+./nombra myfile.pdf --max-content-length 5000
+```
+
+The minimum length required for processing can also be changed via
+`--min-content-length`.
+
+### Content Extraction Optimization
+`extractTextFromPDF` concatenates the text from every page. When the combined
+text would exceed the configured limit, Nombra keeps portions from the start and
+end of the document and discards the middle. This strategy preserves important
+sections like titles, parties, and dates even when large documents are truncated.
 
 ## Contributing
 Pull requests and issues are welcome! Please follow these guidelines:

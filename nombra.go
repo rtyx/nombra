@@ -38,6 +38,7 @@ const (
 
 var (
 	verbose          bool
+	version          = "dev"
 	maxContentLength = 3000
 	minContentLength = 10
 	ocr              bool
@@ -55,6 +56,7 @@ func main() {
 		Short:   "Generate titles for PDF documents using AI",
 		Long:    "A CLI tool that analyzes PDF content and generates appropriate titles using OpenAI's API",
 		Example: "nombra myfile.pdf\n  nombra myfile.pdf --model gpt-4-turbo",
+		Version: version,
 		Args:    cobra.ExactArgs(1),
 		PreRun: func(cmd *cobra.Command, args []string) {
 			if apiKey == "" {
@@ -245,6 +247,10 @@ func extractPDFContent(path string) (string, error) {
 
 // extractTextFromPDF extracts plain text from the PDF using the pdf library.
 // It iterates through all pages, concatenates the extracted text, and performs basic validations.
+// If the combined text becomes very long, consider trimming to include mostly
+// the beginning and end of the document where titles, parties, and dates are
+// usually located. This could yield better context for title generation when
+// approaching the `maxContentLength` limit.
 func extractTextFromPDF(path string) (string, error) {
 	file, reader, err := pdf.Open(path)
 	if err != nil {
@@ -357,7 +363,7 @@ func generateOpenAITitle(content, apiKey, model string) (string, error) {
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,
-					Content: "You are a professional document curator. Analyze the provided document for any dates in the format YYYY.MM.DD that indicate the document's creation or signature date. If one or more valid dates are found, use the latest date and generate a title in the following format: 'YYYY.MM.DD - Entity - Document Description - Recipient'. If no valid date is found, omit the date and generate the title as 'Entity - Document Description - Recipient'. Likewise, if the document lacks a recipient, omit that segment entirely—do not use any placeholder text such as 'Recipient'. Respond with only the title. For example, if the document contains the date '2024.03.31', the title should be '2024.03.31 - John Doe - Lohnabrechnung - Zürich'. If no date is found, then it should be 'Rafael Toledano Illán - Lohnabrechnung - Zürich'.",
+					Content: "You are a professional document curator. Carefully read the provided text and generate a concise filename describing the document.\n\n1. Identify the document type or category in plain language (e.g., Contract, Invoice, Report, Sublease Agreement, Pay Slip).\n2. Identify the main parties or entities involved.\n3. Find the most relevant date (creation, signing, effective, due) and format it as YYYY.MM.DD.\n4. Determine the core subject or topic if needed.\n\nConstruct the filename using these elements with the following priority:\n- If date, type, and parties are present: 'YYYY.MM.DD - [Document Type] - [Party1] - [Party2]'.\n- If date and type are found: 'YYYY.MM.DD - [Document Type] - [Subject or Party]'.\n- If type and parties are found (no clear date): '[Document Type] - [Party1] - [Party2]'.\n- If type and subject are found: '[Document Type] - [Subject]'.\n- If only the type is clear: '[Document Type] - [Key Detail or Subject]'.\n- As a last resort, output a short descriptive phrase summarizing the document.\n\nUse only standard characters (letters, numbers, spaces, hyphens). Keep the title concise and omit placeholder text. Respond only with the filename.\n\nExample: A document mentioning 'Untermietvertrag', 'John Doe', 'Jane Smith' and the date '7.5.2025' should yield '2025.05.07 - Sublease Agreement - John Doe - Jane Smith'. Another example: 'Invoice from ACME Corp dated 15 January 2024' should yield '2024.01.15 - Invoice - ACME Corp'.",
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
@@ -381,30 +387,48 @@ func generateOpenAITitle(content, apiKey, model string) (string, error) {
 
 // truncateContent shortens the input content if it exceeds the maximum allowed length,
 // appending a suffix to indicate that the content has been truncated.
+// truncateContent ensures the most relevant parts of the document are
+// preserved when limiting the text sent to OpenAI. When the content exceeds
+// the configured maximum length, the function keeps portions from both the
+// beginning and end of the text. A suffix is inserted between the two segments
+// to indicate that the middle section has been omitted.
 func truncateContent(content string) string {
-	if len(content) > maxContentLength {
-		return content[:maxContentLength-len(truncationSuffix)] + truncationSuffix
+	if len(content) <= maxContentLength {
+		return content
 	}
-	return content
+
+	// Ensure we always keep at least 1 character from start and end
+	minKeep := 1
+	available := maxContentLength - len(truncationSuffix)
+	if available < 2*minKeep {
+		// Not enough space for both start and end, just return the start
+		return content[:maxContentLength]
+	}
+
+	keep := available / 2
+	start := content[:keep]
+	end := content[len(content)-keep:]
+	return start + truncationSuffix + end
 }
 
 // cleanTitle cleans and formats the generated title by removing extraneous quotes and whitespace,
 // normalizing spacing around dashes, and ensuring proper text formatting.
 func cleanTitle(title string) string {
-	// Remove extraneous quotes and whitespace
-	title = strings.Trim(title, "\"'\"'' \t\n")
+	// Remove extraneous quotes and surrounding whitespace
+	title = strings.Trim(title, "\"' \t\n")
 
 	// Replace newlines with a single space
 	title = strings.ReplaceAll(title, "\n", " ")
 
-	// Ensure that dashes have a single space on each side
-	title = regexp.MustCompile(`\s*-\s*`).ReplaceAllString(title, " - ")
-
-	// Optionally, insert spaces between a lowercase letter followed immediately by an uppercase letter
+	// Insert spaces between a lowercase letter followed immediately by an uppercase letter
 	title = regexp.MustCompile(`([a-z])([A-Z])`).ReplaceAllString(title, "$1 $2")
 
-	// Collapse any extra spaces into a single space
+	// Collapse runs of whitespace
 	title = regexp.MustCompile(`\s+`).ReplaceAllString(title, " ")
 
-	return title
+	// Ensure dashes have a single space on each side
+	title = regexp.MustCompile(`\s*-\s*`).ReplaceAllString(title, " - ")
+
+	// Trim any trailing or leading whitespace introduced by replacements
+	return strings.TrimSpace(title)
 }
