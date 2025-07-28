@@ -27,6 +27,27 @@ cd nombra
 go build -ldflags="-X main.version=$(git rev-parse --short HEAD)" -o nombra
 ```
 
+### Make Nombra a Global Command
+To use `nombra` from anywhere in your system, move the built binary to a directory included in your `PATH`, such as `/usr/local/bin`:
+
+```sh
+sudo mv nombra /usr/local/bin/
+```
+
+You can now run `nombra` from any directory:
+
+```sh
+nombra myfile.pdf
+```
+
+If `/usr/local/bin` is not in your `PATH`, you can check your `PATH` with:
+
+```sh
+echo $PATH
+```
+
+And add it to your shell configuration if needed.
+
 ## Usage
 
 ### Basic usage
