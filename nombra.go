@@ -42,6 +42,7 @@ var (
 	maxContentLength = 3000
 	minContentLength = 10
 	ocr              bool
+	model            string
 )
 
 // main initializes and executes the CLI command for generating a title for a PDF file.
@@ -54,6 +55,7 @@ func main() {
 		Use:     "nombra [PDF file]",
 		Short:   "Generate titles for PDF documents using AI",
 		Long:    "A CLI tool that analyzes PDF content and generates appropriate titles using OpenAI's API",
+		Example: "nombra myfile.pdf\n  nombra myfile.pdf --model gpt-4-turbo",
 		Version: version,
 		Args:    cobra.ExactArgs(1),
 		PreRun: func(cmd *cobra.Command, args []string) {
@@ -77,7 +79,7 @@ func main() {
 				os.Exit(1)
 			}
 
-			title, err := generateOpenAITitle(textContent, apiKey)
+			title, err := generateOpenAITitle(textContent, apiKey, model)
 			if err != nil {
 				fmt.Printf("Title generation failed: %v\n", err)
 				os.Exit(1)
@@ -98,7 +100,8 @@ func main() {
 	// Configure flags
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose logging")
 	rootCmd.PersistentFlags().BoolVarP(&ocr, "ocr", "o", false, "Force OCR text extraction")
-	rootCmd.Flags().IntVarP(&maxContentLength, "max-content-length", "m", 3000, "Maximum content length for processing")
+	rootCmd.PersistentFlags().StringVarP(&model, "model", "m", openai.GPT3Dot5Turbo, "OpenAI model to use")
+	rootCmd.Flags().IntVarP(&maxContentLength, "max-content-length", "l", 3000, "Maximum content length for processing")
 	rootCmd.Flags().IntVarP(&minContentLength, "min-content-length", "n", 10, "Minimum content length required for processing")
 	rootCmd.Flags().StringVarP(&apiKey, "key", "k", "", "OpenAI API key (default: $OPENAI_API_KEY)")
 
@@ -335,7 +338,7 @@ func extractTextViaOCR(pdfPath string) (string, error) {
 // generateOpenAITitle sends the extracted PDF content to OpenAI's Chat Completion API
 // to generate an appropriate title based on specific formatting rules.
 // It then cleans the returned title to ensure proper formatting.
-func generateOpenAITitle(content, apiKey string) (string, error) {
+func generateOpenAITitle(content, apiKey, model string) (string, error) {
 	if content == "" {
 		return "", fmt.Errorf("empty content provided for title generation")
 	}
@@ -356,7 +359,7 @@ func generateOpenAITitle(content, apiKey string) (string, error) {
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
-			Model: openai.GPT3Dot5Turbo,
+			Model: model,
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,

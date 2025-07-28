@@ -77,6 +77,13 @@ While nombra automatically opts for OCR when needed, you can also force it:
 ./nombra myfile.pdf --verbose
 ```
 
+### Selecting an OpenAI model
+By default, Nombra uses `gpt-3.5-turbo` for title generation. You can choose a
+different model with the `--model` flag:
+```sh
+./nombra myfile.pdf --model gpt-4-turbo
+```
+
 ### Checking the Version
 Display the Git commit the binary was built from:
 ```sh
