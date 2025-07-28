@@ -23,8 +23,8 @@ Nombra is a CLI tool that analyzes the content of PDF documents and generates me
 git clone https://github.com/YOUR_USERNAME/nombra.git
 cd nombra
 
-# Build the binary
-go build -o nombra
+# Build the binary with version information
+go build -ldflags="-X main.version=$(git rev-parse --short HEAD)" -o nombra
 ```
 
 ## Usage
@@ -54,6 +54,12 @@ While nombra automatically opts for OCR when needed, you can also force it:
 ### Verbose Mode
 ```sh
 ./nombra myfile.pdf --verbose
+```
+
+### Checking the Version
+Display the Git commit the binary was built from:
+```sh
+./nombra --version
 ```
 
 ### Adjusting Content Length

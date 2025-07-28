@@ -38,6 +38,7 @@ const (
 
 var (
 	verbose          bool
+	version          = "dev"
 	maxContentLength = 3000
 	minContentLength = 10
 	ocr              bool
@@ -50,10 +51,11 @@ func main() {
 	var apiKey string
 
 	rootCmd := &cobra.Command{
-		Use:   "nombra [PDF file]",
-		Short: "Generate titles for PDF documents using AI",
-		Long:  "A CLI tool that analyzes PDF content and generates appropriate titles using OpenAI's API",
-		Args:  cobra.ExactArgs(1),
+		Use:     "nombra [PDF file]",
+		Short:   "Generate titles for PDF documents using AI",
+		Long:    "A CLI tool that analyzes PDF content and generates appropriate titles using OpenAI's API",
+		Version: version,
+		Args:    cobra.ExactArgs(1),
 		PreRun: func(cmd *cobra.Command, args []string) {
 			if apiKey == "" {
 				apiKey = os.Getenv("OPENAI_API_KEY")
