@@ -56,6 +56,25 @@ While nombra automatically opts for OCR when needed, you can also force it:
 ./nombra myfile.pdf --verbose
 ```
 
+### Adjusting Content Length
+You can control how much text is sent to the language model. The
+`--max-content-length` flag specifies the maximum number of characters that will
+be included when generating a title. Experimenting with this value can help
+strike a balance between providing enough context and keeping requests small:
+
+```sh
+./nombra myfile.pdf --max-content-length 5000
+```
+
+The minimum length required for processing can also be changed via
+`--min-content-length`.
+
+### Content Extraction Optimization
+`extractTextFromPDF` concatenates the text from every page. When the combined
+text would exceed the configured limit, Nombra keeps portions from the start and
+end of the document and discards the middle. This strategy preserves important
+sections like titles, parties, and dates even when large documents are truncated.
+
 ## Contributing
 Pull requests and issues are welcome! Please follow these guidelines:
 - Report bugs and feature requests via GitHub issues.
