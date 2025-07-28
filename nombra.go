@@ -388,20 +388,21 @@ func truncateContent(content string) string {
 // cleanTitle cleans and formats the generated title by removing extraneous quotes and whitespace,
 // normalizing spacing around dashes, and ensuring proper text formatting.
 func cleanTitle(title string) string {
-	// Remove extraneous quotes and whitespace
-	title = strings.Trim(title, "\"'\"'' \t\n")
+	// Remove extraneous quotes and surrounding whitespace
+	title = strings.Trim(title, "\"' \t\n")
 
 	// Replace newlines with a single space
 	title = strings.ReplaceAll(title, "\n", " ")
 
-	// Ensure that dashes have a single space on each side
-	title = regexp.MustCompile(`\s*-\s*`).ReplaceAllString(title, " - ")
-
-	// Optionally, insert spaces between a lowercase letter followed immediately by an uppercase letter
+	// Insert spaces between a lowercase letter followed immediately by an uppercase letter
 	title = regexp.MustCompile(`([a-z])([A-Z])`).ReplaceAllString(title, "$1 $2")
 
-	// Collapse any extra spaces into a single space
+	// Collapse runs of whitespace
 	title = regexp.MustCompile(`\s+`).ReplaceAllString(title, " ")
 
-	return title
+	// Ensure dashes have a single space on each side
+	title = regexp.MustCompile(`\s*-\s*`).ReplaceAllString(title, " - ")
+
+	// Trim any trailing or leading whitespace introduced by replacements
+	return strings.TrimSpace(title)
 }
