@@ -242,6 +242,10 @@ func extractPDFContent(path string) (string, error) {
 
 // extractTextFromPDF extracts plain text from the PDF using the pdf library.
 // It iterates through all pages, concatenates the extracted text, and performs basic validations.
+// If the combined text becomes very long, consider trimming to include mostly
+// the beginning and end of the document where titles, parties, and dates are
+// usually located. This could yield better context for title generation when
+// approaching the `maxContentLength` limit.
 func extractTextFromPDF(path string) (string, error) {
 	file, reader, err := pdf.Open(path)
 	if err != nil {
@@ -378,11 +382,26 @@ func generateOpenAITitle(content, apiKey string) (string, error) {
 
 // truncateContent shortens the input content if it exceeds the maximum allowed length,
 // appending a suffix to indicate that the content has been truncated.
+// truncateContent ensures the most relevant parts of the document are
+// preserved when limiting the text sent to OpenAI. When the content exceeds
+// the configured maximum length, the function keeps portions from both the
+// beginning and end of the text. A suffix is inserted between the two segments
+// to indicate that the middle section has been omitted.
 func truncateContent(content string) string {
-	if len(content) > maxContentLength {
-		return content[:maxContentLength-len(truncationSuffix)] + truncationSuffix
+	if len(content) <= maxContentLength {
+		return content
 	}
-	return content
+
+	// Keep half of the allowed length from the start and half from the end.
+	// The suffix accounts for the removed middle section.
+	keep := (maxContentLength - len(truncationSuffix)) / 2
+	if keep <= 0 {
+		return content[:maxContentLength]
+	}
+
+	start := content[:keep]
+	end := content[len(content)-keep:]
+	return start + truncationSuffix + end
 }
 
 // cleanTitle cleans and formats the generated title by removing extraneous quotes and whitespace,
