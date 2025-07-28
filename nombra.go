@@ -360,7 +360,7 @@ func generateOpenAITitle(content, apiKey string) (string, error) {
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,
-					Content: "You are a professional document curator. Analyze the provided document for any dates in the format YYYY.MM.DD that indicate the document's creation or signature date. If one or more valid dates are found, use the latest date and generate a title in the following format: 'YYYY.MM.DD - Entity - Document Description - Recipient'. If no valid date is found, omit the date and generate the title as 'Entity - Document Description - Recipient'. Likewise, if the document lacks a recipient, omit that segment entirely—do not use any placeholder text such as 'Recipient'. Respond with only the title. For example, if the document contains the date '2024.03.31', the title should be '2024.03.31 - John Doe - Lohnabrechnung - Zürich'. If no date is found, then it should be 'Rafael Toledano Illán - Lohnabrechnung - Zürich'.",
+					Content: "You are a professional document curator. Carefully read the provided text and generate a concise filename describing the document.\n\n1. Identify the document type or category in plain language (e.g., Contract, Invoice, Report, Sublease Agreement, Pay Slip).\n2. Identify the main parties or entities involved.\n3. Find the most relevant date (creation, signing, effective, due) and format it as YYYY.MM.DD.\n4. Determine the core subject or topic if needed.\n\nConstruct the filename using these elements with the following priority:\n- If date, type, and parties are present: 'YYYY.MM.DD - [Document Type] - [Party1] - [Party2]'.\n- If date and type are found: 'YYYY.MM.DD - [Document Type] - [Subject or Party]'.\n- If type and parties are found (no clear date): '[Document Type] - [Party1] - [Party2]'.\n- If type and subject are found: '[Document Type] - [Subject]'.\n- If only the type is clear: '[Document Type] - [Key Detail or Subject]'.\n- As a last resort, output a short descriptive phrase summarizing the document.\n\nUse only standard characters (letters, numbers, spaces, hyphens). Keep the title concise and omit placeholder text. Respond only with the filename.\n\nExample: A document mentioning 'Untermietvertrag', 'John Doe', 'Jane Smith' and the date '7.5.2025' should yield '2025.05.07 - Sublease Agreement - John Doe - Jane Smith'. Another example: 'Invoice from ACME Corp dated 15 January 2024' should yield '2024.01.15 - Invoice - ACME Corp'.",
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
@@ -394,13 +394,15 @@ func truncateContent(content string) string {
 		return content
 	}
 
-	// Keep half of the allowed length from the start and half from the end.
-	// The suffix accounts for the removed middle section.
-	keep := (maxContentLength - len(truncationSuffix)) / 2
-	if keep <= 0 {
+	// Ensure we always keep at least 1 character from start and end
+	minKeep := 1
+	available := maxContentLength - len(truncationSuffix)
+	if available < 2*minKeep {
+		// Not enough space for both start and end, just return the start
 		return content[:maxContentLength]
 	}
 
+	keep := available / 2
 	start := content[:keep]
 	end := content[len(content)-keep:]
 	return start + truncationSuffix + end
