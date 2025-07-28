@@ -45,6 +45,36 @@ var (
 	model            string
 )
 
+// validModels lists the OpenAI models that can be used with the --model flag.
+// The slice is used for validating user input and constructing helpful error
+// messages when an unsupported model is supplied.
+var validModels = []string{
+	openai.GPT3Dot5Turbo,
+	openai.GPT3Dot5Turbo0125,
+	openai.GPT3Dot5Turbo1106,
+	openai.GPT3Dot5Turbo16K,
+	openai.GPT4Turbo,
+	openai.GPT4Turbo0125,
+	openai.GPT4Turbo1106,
+	openai.GPT4TurboPreview,
+	openai.GPT4Turbo20240409,
+	openai.GPT4,
+	openai.GPT4o,
+	openai.GPT4oMini,
+	openai.GPT4VisionPreview,
+}
+
+// validateModel ensures the provided model is one of the supported values.
+// It returns an error listing the allowed models when validation fails.
+func validateModel(m string) error {
+	for _, v := range validModels {
+		if m == v {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid model %q. valid models: %s", m, strings.Join(validModels, ", "))
+}
+
 // main initializes and executes the CLI command for generating a title for a PDF file.
 // It sets up the command line flags, validates the API key, extracts content from the PDF,
 // generates a title using OpenAI's API, and finally renames the file based on the title.
@@ -64,6 +94,10 @@ func main() {
 			}
 			if apiKey == "" {
 				fmt.Println("Error: API key required. Use --key or set OPENAI_API_KEY")
+				os.Exit(1)
+			}
+			if err := validateModel(model); err != nil {
+				fmt.Println(err)
 				os.Exit(1)
 			}
 		},
