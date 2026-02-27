@@ -310,7 +310,14 @@ func extractTextFromPDF(path string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("page %d text extraction failed: %w", i, err)
 		}
-		content.WriteString(strings.TrimSpace(text))
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" {
+			continue
+		}
+		if content.Len() > 0 {
+			content.WriteString("\n\n")
+		}
+		content.WriteString(trimmed)
 	}
 
 	if content.Len() == 0 {
