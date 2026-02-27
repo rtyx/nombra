@@ -23,6 +23,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/ledongthuc/pdf"
@@ -347,6 +349,16 @@ func extractTextViaOCR(pdfPath string) (string, error) {
 		return "", fmt.Errorf("no pages converted from PDF")
 	}
 
+	// Ensure OCR processes pages in numeric order (page-2 before page-10).
+	sort.Slice(pages, func(i, j int) bool {
+		pi := pageNumberFromPath(pages[i])
+		pj := pageNumberFromPath(pages[j])
+		if pi == pj {
+			return pages[i] < pages[j]
+		}
+		return pi < pj
+	})
+
 	for _, page := range pages {
 		// Run OCR on each page
 		cmd := exec.Command("tesseract", page, "stdout")
@@ -367,6 +379,20 @@ func extractTextViaOCR(pdfPath string) (string, error) {
 	}
 
 	return content.String(), nil
+}
+
+func pageNumberFromPath(path string) int {
+	matches := regexp.MustCompile(`page-(\d+)\.png$`).FindStringSubmatch(filepath.Base(path))
+	if len(matches) != 2 {
+		return 0
+	}
+
+	n, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0
+	}
+
+	return n
 }
 
 // generateOpenAITitle sends the extracted PDF content to OpenAI's Chat Completion API
