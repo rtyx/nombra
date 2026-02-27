@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"os"
@@ -37,6 +38,7 @@ const (
 	maxFilenameLength = 120
 	truncationSuffix  = "... [content truncated]"
 	sanitizeRegex     = `[<>:"\/\\|?*]`
+	visionModel       = openai.GPT4oMini
 )
 
 var (
@@ -125,7 +127,7 @@ func main() {
 			}
 
 			filePath := args[0]
-			textContent, err := extractPDFContent(filePath)
+			textContent, err := extractPDFContent(filePath, apiKey)
 			if err != nil {
 				fmt.Printf("PDF processing error: %v\n", err)
 				os.Exit(1)
@@ -272,8 +274,9 @@ func validateContentLength(content string) error {
 
 // extractPDFContent extracts text from the specified PDF file.
 // It first attempts to extract text using a standard method.
-// If that fails or produces empty content, it falls back to OCR-based extraction.
-func extractPDFContent(path string) (string, error) {
+// If that fails or produces empty content, it falls back to OCR-based extraction,
+// then to image analysis via OpenAI as a last resort.
+func extractPDFContent(path, apiKey string) (string, error) {
 	// Define extraction methods
 	extractors := []struct {
 		name string
@@ -287,10 +290,10 @@ func extractPDFContent(path string) (string, error) {
 	if ocr {
 		text, err := extractTextViaOCR(path)
 		if err != nil {
-			return "", err
+			return extractContentViaVisionFallback(path, apiKey, err)
 		}
 		if err := validateContentLength(text); err != nil {
-			return "", err
+			return extractContentViaVisionFallback(path, apiKey, err)
 		}
 		return text, nil
 	}
@@ -318,8 +321,30 @@ func extractPDFContent(path string) (string, error) {
 	}
 
 	// If we get here, all extraction methods failed
-	if lastErr != nil {
-		return "", fmt.Errorf("all text extraction methods failed: %w", lastErr)
+	return extractContentViaVisionFallback(path, apiKey, lastErr)
+}
+
+func extractContentViaVisionFallback(path, apiKey string, textExtractionErr error) (string, error) {
+	if verbose {
+		log.Printf("Text extraction failed; attempting OpenAI image analysis fallback (model: %s)...", visionModel)
+	}
+
+	description, err := describePDFImage(path, apiKey)
+	if err == nil && strings.TrimSpace(description) != "" {
+		if verbose {
+			log.Printf("Vision fallback succeeded (description length: %d characters)", len(description))
+		}
+		return description, nil
+	}
+
+	if textExtractionErr != nil && err != nil {
+		return "", fmt.Errorf("all text extraction methods failed: %v; vision fallback failed: %w", textExtractionErr, err)
+	}
+	if textExtractionErr != nil {
+		return "", fmt.Errorf("all text extraction methods failed: %w", textExtractionErr)
+	}
+	if err != nil {
+		return "", fmt.Errorf("no text could be extracted from the PDF and vision fallback failed: %w", err)
 	}
 	return "", fmt.Errorf("no text could be extracted from the PDF")
 }
@@ -429,6 +454,73 @@ func extractTextViaOCR(pdfPath string) (string, error) {
 	}
 
 	return content.String(), nil
+}
+
+// describePDFImage analyzes the first page of the PDF as an image and returns
+// a short plain-text description that can be used for title generation.
+func describePDFImage(pdfPath, apiKey string) (string, error) {
+	tempDir, err := os.MkdirTemp("", "nombra-vision")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory for vision fallback: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	imagePrefix := filepath.Join(tempDir, "page-1")
+	cmd := exec.Command("pdftoppm", "-f", "1", "-singlefile", "-png", pdfPath, imagePrefix)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("pdftoppm failed for vision fallback: %w", err)
+	}
+
+	imagePath := imagePrefix + ".png"
+	imageBytes, err := os.ReadFile(imagePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read rendered page image: %w", err)
+	}
+
+	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imageBytes)
+	client := openai.NewClient(apiKey)
+
+	resp, err := client.CreateChatCompletion(
+		context.Background(),
+		openai.ChatCompletionRequest{
+			Model: visionModel,
+			Messages: []openai.ChatCompletionMessage{
+				{
+					Role: openai.ChatMessageRoleSystem,
+					Content: "You analyze document images. Describe what the image likely is so a filename can be generated. " +
+						"Include document type, visible entities, and date if readable. " +
+						"If text is unreadable, give a concise visual description. Respond in plain text only.",
+				},
+				{
+					Role: openai.ChatMessageRoleUser,
+					MultiContent: []openai.ChatMessagePart{
+						{
+							Type: openai.ChatMessagePartTypeText,
+							Text: "Describe this PDF page image for naming the file.",
+						},
+						{
+							Type: openai.ChatMessagePartTypeImageURL,
+							ImageURL: &openai.ChatMessageImageURL{
+								URL:    dataURL,
+								Detail: openai.ImageURLDetailHigh,
+							},
+						},
+					},
+				},
+			},
+			Temperature: 0.2,
+		},
+	)
+	if err != nil {
+		return "", fmt.Errorf("OpenAI vision API error: %w", err)
+	}
+
+	if len(resp.Choices) == 0 || strings.TrimSpace(resp.Choices[0].Message.Content) == "" {
+		return "", fmt.Errorf("empty response from OpenAI vision API")
+	}
+
+	return resp.Choices[0].Message.Content, nil
 }
 
 func pageNumberFromPath(path string) int {

@@ -7,6 +7,7 @@ Nombra is a CLI tool that analyzes the content of PDF documents and generates me
 - Extracts text from PDFs
 - Uses AI to generate relevant titles
 - Supports OCR (via Tesseract) for scanned PDFs
+- Falls back to OpenAI image analysis when OCR/text extraction finds nothing
 - Handles special characters and long filenames safely
 - Verbose mode for debugging
 
@@ -72,6 +73,10 @@ While nombra automatically opts for OCR when needed, you can also force it:
 ./nombra myfile.pdf --ocr
 ```
 
+If both native extraction and OCR fail, Nombra analyzes the first PDF page as an
+image using OpenAI (`gpt-4o-mini`) and uses that description to generate a
+filename.
+
 ### Verbose Mode
 ```sh
 ./nombra myfile.pdf --verbose
@@ -117,4 +122,3 @@ Pull requests and issues are welcome! Please follow these guidelines:
 
 ## License
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
-
