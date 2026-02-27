@@ -57,6 +57,22 @@ And add it to your shell configuration if needed.
 ```
 This will generate a title based on the PDF’s content and rename the file accordingly.
 
+### Processing Multiple Files
+You can process several files in one command:
+```sh
+./nombra file1.pdf file2.pdf file3.pdf
+```
+
+You can also process all PDFs in a directory:
+```sh
+./nombra --dir ./documents
+```
+
+Control parallel processing with workers:
+```sh
+./nombra --dir ./documents --workers 6
+```
+
 ### Using an API key
 ```sh
 ./nombra myfile.pdf --key YOUR_OPENAI_API_KEY
@@ -81,6 +97,13 @@ filename.
 ```sh
 ./nombra myfile.pdf --verbose
 ```
+
+### Interactive Confirmation
+Use interactive mode to approve the rename before applying it:
+```sh
+./nombra myfile.pdf --interactive
+```
+Note: `--interactive` currently supports a single input file at a time.
 
 ### Selecting an OpenAI model
 By default, Nombra uses `gpt-3.5-turbo` for title generation. You can choose a

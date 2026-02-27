@@ -25,9 +25,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ledongthuc/pdf"
 	openai "github.com/sashabaranov/go-openai"
@@ -51,7 +53,23 @@ var (
 	dryRun           bool
 	printOnly        bool
 	interactive      bool
+	workers          int
+	inputDir         string
 )
+
+type fileJob struct {
+	index int
+	path  string
+}
+
+type fileResult struct {
+	index   int
+	path    string
+	title   string
+	newPath string
+	skipped bool
+	err     error
+}
 
 // validModels lists the OpenAI models that can be used with the --model flag.
 // The slice is used for validating user input and constructing helpful error
@@ -90,12 +108,17 @@ func main() {
 	var apiKey string
 
 	rootCmd := &cobra.Command{
-		Use:     "nombra [PDF file]",
+		Use:     "nombra [PDF file ...]",
 		Short:   "Generate titles for PDF documents using AI",
 		Long:    "A CLI tool that analyzes PDF content and generates appropriate titles using OpenAI's API",
-		Example: "nombra myfile.pdf\n  nombra myfile.pdf --model gpt-4-turbo",
+		Example: "nombra myfile.pdf\n  nombra myfile1.pdf myfile2.pdf --workers 4\n  nombra --dir ./docs --workers 6\n  nombra myfile.pdf --model gpt-4-turbo",
 		Version: version,
-		Args:    cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 && strings.TrimSpace(inputDir) == "" {
+				return fmt.Errorf("provide at least one PDF file or use --dir")
+			}
+			return nil
+		},
 		PreRun: func(cmd *cobra.Command, args []string) {
 			if apiKey == "" {
 				apiKey = os.Getenv("OPENAI_API_KEY")
@@ -120,58 +143,66 @@ func main() {
 				fmt.Println(err)
 				os.Exit(1)
 			}
+			if workers < 1 {
+				fmt.Println("Error: --workers must be at least 1")
+				os.Exit(1)
+			}
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			if verbose {
 				log.Println("Verbose mode enabled")
 			}
 
-			filePath := args[0]
-			textContent, err := extractPDFContent(filePath, apiKey)
+			files, err := collectInputPDFs(args, inputDir)
 			if err != nil {
-				fmt.Printf("PDF processing error: %v\n", err)
+				fmt.Printf("Input error: %v\n", err)
 				os.Exit(1)
 			}
 
-			title, err := generateOpenAITitle(textContent, apiKey, model)
-			if err != nil {
-				fmt.Printf("Title generation failed: %v\n", err)
+			if interactive && len(files) > 1 {
+				fmt.Println("Error: --interactive supports only one file at a time")
 				os.Exit(1)
 			}
 
-			if printOnly {
-				fmt.Println(title)
-				return
+			if workers > len(files) {
+				workers = len(files)
 			}
 
-			fmt.Printf("\nGenerated title: %s\n\n", title)
+			client := openai.NewClient(apiKey)
+			results := processFiles(files, client, workers)
 
-			if dryRun {
-				dir := filepath.Dir(filePath)
-				ext := filepath.Ext(filePath)
-				proposedName := sanitizeFilename(title) + ext
-				if len(proposedName) > maxFilenameLength {
-					proposedName = proposedName[:maxFilenameLength-len(ext)] + ext
+			var successCount, failedCount, skippedCount int
+			for _, result := range results {
+				if result.err != nil {
+					failedCount++
+					fmt.Printf("[FAIL] %s: %v\n", filepath.Base(result.path), result.err)
+					continue
 				}
-				proposedPath := filepath.Join(dir, proposedName)
-				fmt.Printf("Dry run (no changes made):\n  %s\n  -> %s\n\n", filepath.Base(filePath), filepath.Base(proposedPath))
-				return
-			}
 
-			if interactive {
-				if !confirmRename(filePath, title) {
-					fmt.Println("Rename cancelled.")
-					return
+				if result.skipped {
+					skippedCount++
+					fmt.Printf("[SKIP] %s: rename cancelled\n", filepath.Base(result.path))
+					continue
+				}
+
+				successCount++
+				switch {
+				case printOnly:
+					fmt.Printf("%s: %s\n", filepath.Base(result.path), result.title)
+				case dryRun:
+					fmt.Printf("Dry run (no changes made):\n  %s\n  -> %s\n\n", filepath.Base(result.path), filepath.Base(result.newPath))
+				default:
+					fmt.Printf("Successfully renamed:\n  %s\n  -> %s\n\n", filepath.Base(result.path), filepath.Base(result.newPath))
 				}
 			}
 
-			newPath, err := safeRenameFile(filePath, title)
-			if err != nil {
-				fmt.Printf("Renaming failed: %v\n", err)
-				os.Exit(1)
+			if len(files) > 1 {
+				fmt.Printf("Summary: %d succeeded, %d skipped, %d failed (total: %d)\n", successCount, skippedCount, failedCount, len(files))
 			}
 
-			fmt.Printf("Successfully renamed:\n  %s\n  → %s\n\n", filepath.Base(filePath), filepath.Base(newPath))
+			if failedCount > 0 {
+				os.Exit(1)
+			}
 		},
 	}
 
@@ -182,6 +213,8 @@ func main() {
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview the new filename without renaming")
 	rootCmd.Flags().BoolVar(&printOnly, "print-only", false, "Print only the generated title")
 	rootCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Ask for confirmation before renaming")
+	rootCmd.Flags().StringVar(&inputDir, "dir", "", "Directory containing PDF files to process")
+	rootCmd.Flags().IntVarP(&workers, "workers", "w", runtime.NumCPU(), "Number of files to process concurrently")
 	rootCmd.Flags().IntVarP(&maxContentLength, "max-content-length", "l", 3000, "Maximum content length for processing")
 	rootCmd.Flags().IntVarP(&minContentLength, "min-content-length", "n", 10, "Minimum content length required for processing")
 	rootCmd.Flags().StringVarP(&apiKey, "key", "k", "", "OpenAI API key (default: $OPENAI_API_KEY)")
@@ -191,6 +224,124 @@ func main() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+}
+
+func collectInputPDFs(args []string, dir string) ([]string, error) {
+	candidates := append([]string{}, args...)
+
+	if dir != "" {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read --dir %q: %w", dir, err)
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if strings.EqualFold(filepath.Ext(name), ".pdf") {
+				candidates = append(candidates, filepath.Join(dir, name))
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no PDF files found")
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	files := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if !strings.EqualFold(filepath.Ext(candidate), ".pdf") {
+			return nil, fmt.Errorf("not a PDF file: %s", candidate)
+		}
+		info, err := os.Stat(candidate)
+		if err != nil {
+			return nil, fmt.Errorf("file not accessible %q: %w", candidate, err)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("path is a directory, expected PDF file: %s", candidate)
+		}
+
+		abs, err := filepath.Abs(candidate)
+		if err != nil {
+			abs = candidate
+		}
+		if _, ok := seen[abs]; ok {
+			continue
+		}
+		seen[abs] = struct{}{}
+		files = append(files, abs)
+	}
+
+	sort.Strings(files)
+	return files, nil
+}
+
+func processFiles(files []string, client *openai.Client, workerCount int) []fileResult {
+	jobs := make(chan fileJob)
+	results := make(chan fileResult, len(files))
+	var wg sync.WaitGroup
+
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				result := processSingleFile(job.path, client)
+				result.index = job.index
+				result.path = job.path
+				results <- result
+			}
+		}()
+	}
+
+	for i, path := range files {
+		jobs <- fileJob{index: i, path: path}
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+
+	out := make([]fileResult, 0, len(files))
+	for result := range results {
+		out = append(out, result)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].index < out[j].index
+	})
+	return out
+}
+
+func processSingleFile(filePath string, client *openai.Client) fileResult {
+	textContent, err := extractPDFContent(filePath, client)
+	if err != nil {
+		return fileResult{err: fmt.Errorf("PDF processing error: %w", err)}
+	}
+
+	title, err := generateOpenAITitle(textContent, client, model)
+	if err != nil {
+		return fileResult{err: fmt.Errorf("title generation failed: %w", err)}
+	}
+
+	if printOnly {
+		return fileResult{title: title}
+	}
+
+	if dryRun {
+		return fileResult{title: title, newPath: buildProposedPath(filePath, title)}
+	}
+
+	if interactive && !confirmRename(filePath, title) {
+		return fileResult{title: title, skipped: true}
+	}
+
+	newPath, err := safeRenameFile(filePath, title)
+	if err != nil {
+		return fileResult{err: fmt.Errorf("renaming failed: %w", err)}
+	}
+	return fileResult{title: title, newPath: newPath}
 }
 
 // safeRenameFile renames the original file based on the generated title.
@@ -203,16 +354,9 @@ func safeRenameFile(originalPath, title string) (string, error) {
 		return "", fmt.Errorf("generated title results in invalid filename")
 	}
 
+	newPath := buildProposedPath(originalPath, cleanTitle)
 	dir := filepath.Dir(originalPath)
 	ext := filepath.Ext(originalPath)
-	baseName := cleanTitle + ext
-
-	// Ensure filename length is filesystem-safe
-	if len(baseName) > maxFilenameLength {
-		baseName = baseName[:maxFilenameLength-len(ext)] + ext
-	}
-
-	newPath := filepath.Join(dir, baseName)
 
 	// Handle existing files with same name
 	if _, err := os.Stat(newPath); err == nil {
@@ -225,6 +369,16 @@ func safeRenameFile(originalPath, title string) (string, error) {
 	}
 
 	return newPath, nil
+}
+
+func buildProposedPath(originalPath, title string) string {
+	dir := filepath.Dir(originalPath)
+	ext := filepath.Ext(originalPath)
+	baseName := sanitizeFilename(title) + ext
+	if len(baseName) > maxFilenameLength {
+		baseName = baseName[:maxFilenameLength-len(ext)] + ext
+	}
+	return filepath.Join(dir, baseName)
 }
 
 // sanitizeFilename removes any invalid characters from the title and trims whitespace.
@@ -276,7 +430,7 @@ func validateContentLength(content string) error {
 // It first attempts to extract text using a standard method.
 // If that fails or produces empty content, it falls back to OCR-based extraction,
 // then to image analysis via OpenAI as a last resort.
-func extractPDFContent(path, apiKey string) (string, error) {
+func extractPDFContent(path string, client *openai.Client) (string, error) {
 	// Define extraction methods
 	extractors := []struct {
 		name string
@@ -290,10 +444,10 @@ func extractPDFContent(path, apiKey string) (string, error) {
 	if ocr {
 		text, err := extractTextViaOCR(path)
 		if err != nil {
-			return extractContentViaVisionFallback(path, apiKey, err)
+			return extractContentViaVisionFallback(path, client, err)
 		}
 		if err := validateContentLength(text); err != nil {
-			return extractContentViaVisionFallback(path, apiKey, err)
+			return extractContentViaVisionFallback(path, client, err)
 		}
 		return text, nil
 	}
@@ -321,15 +475,15 @@ func extractPDFContent(path, apiKey string) (string, error) {
 	}
 
 	// If we get here, all extraction methods failed
-	return extractContentViaVisionFallback(path, apiKey, lastErr)
+	return extractContentViaVisionFallback(path, client, lastErr)
 }
 
-func extractContentViaVisionFallback(path, apiKey string, textExtractionErr error) (string, error) {
+func extractContentViaVisionFallback(path string, client *openai.Client, textExtractionErr error) (string, error) {
 	if verbose {
 		log.Printf("Text extraction failed; attempting OpenAI image analysis fallback (model: %s)...", visionModel)
 	}
 
-	description, err := describePDFImage(path, apiKey)
+	description, err := describePDFImage(path, client)
 	if err == nil && strings.TrimSpace(description) != "" {
 		if verbose {
 			log.Printf("Vision fallback succeeded (description length: %d characters)", len(description))
@@ -458,7 +612,7 @@ func extractTextViaOCR(pdfPath string) (string, error) {
 
 // describePDFImage analyzes the first page of the PDF as an image and returns
 // a short plain-text description that can be used for title generation.
-func describePDFImage(pdfPath, apiKey string) (string, error) {
+func describePDFImage(pdfPath string, client *openai.Client) (string, error) {
 	tempDir, err := os.MkdirTemp("", "nombra-vision")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp directory for vision fallback: %w", err)
@@ -479,8 +633,6 @@ func describePDFImage(pdfPath, apiKey string) (string, error) {
 	}
 
 	dataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(imageBytes)
-	client := openai.NewClient(apiKey)
-
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
@@ -557,7 +709,7 @@ func confirmRename(filePath, title string) bool {
 // generateOpenAITitle sends the extracted PDF content to OpenAI's Chat Completion API
 // to generate an appropriate title based on specific formatting rules.
 // It then cleans the returned title to ensure proper formatting.
-func generateOpenAITitle(content, apiKey, model string) (string, error) {
+func generateOpenAITitle(content string, client *openai.Client, model string) (string, error) {
 	if content == "" {
 		return "", fmt.Errorf("empty content provided for title generation")
 	}
@@ -572,8 +724,6 @@ func generateOpenAITitle(content, apiKey, model string) (string, error) {
 		log.Println("Content:")
 		log.Println(content)
 	}
-
-	client := openai.NewClient(apiKey)
 
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
