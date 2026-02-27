@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -45,6 +46,9 @@ var (
 	minContentLength = 10
 	ocr              bool
 	model            string
+	dryRun           bool
+	printOnly        bool
+	interactive      bool
 )
 
 // validModels lists the OpenAI models that can be used with the --model flag.
@@ -98,6 +102,18 @@ func main() {
 				fmt.Println("Error: API key required. Use --key or set OPENAI_API_KEY")
 				os.Exit(1)
 			}
+			if printOnly && dryRun {
+				fmt.Println("Error: --print-only cannot be combined with --dry-run")
+				os.Exit(1)
+			}
+			if printOnly && interactive {
+				fmt.Println("Error: --print-only cannot be combined with --interactive")
+				os.Exit(1)
+			}
+			if dryRun && interactive {
+				fmt.Println("Error: --dry-run cannot be combined with --interactive")
+				os.Exit(1)
+			}
 			if err := validateModel(model); err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -121,7 +137,31 @@ func main() {
 				os.Exit(1)
 			}
 
+			if printOnly {
+				fmt.Println(title)
+				return
+			}
+
 			fmt.Printf("\nGenerated title: %s\n\n", title)
+
+			if dryRun {
+				dir := filepath.Dir(filePath)
+				ext := filepath.Ext(filePath)
+				proposedName := sanitizeFilename(title) + ext
+				if len(proposedName) > maxFilenameLength {
+					proposedName = proposedName[:maxFilenameLength-len(ext)] + ext
+				}
+				proposedPath := filepath.Join(dir, proposedName)
+				fmt.Printf("Dry run (no changes made):\n  %s\n  -> %s\n\n", filepath.Base(filePath), filepath.Base(proposedPath))
+				return
+			}
+
+			if interactive {
+				if !confirmRename(filePath, title) {
+					fmt.Println("Rename cancelled.")
+					return
+				}
+			}
 
 			newPath, err := safeRenameFile(filePath, title)
 			if err != nil {
@@ -137,6 +177,9 @@ func main() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose logging")
 	rootCmd.PersistentFlags().BoolVarP(&ocr, "ocr", "o", false, "Force OCR text extraction")
 	rootCmd.PersistentFlags().StringVarP(&model, "model", "m", openai.GPT3Dot5Turbo, "OpenAI model to use")
+	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview the new filename without renaming")
+	rootCmd.Flags().BoolVar(&printOnly, "print-only", false, "Print only the generated title")
+	rootCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Ask for confirmation before renaming")
 	rootCmd.Flags().IntVarP(&maxContentLength, "max-content-length", "l", 3000, "Maximum content length for processing")
 	rootCmd.Flags().IntVarP(&minContentLength, "min-content-length", "n", 10, "Minimum content length required for processing")
 	rootCmd.Flags().StringVarP(&apiKey, "key", "k", "", "OpenAI API key (default: $OPENAI_API_KEY)")
@@ -400,6 +443,23 @@ func pageNumberFromPath(path string) int {
 	}
 
 	return n
+}
+
+func confirmRename(filePath, title string) bool {
+	ext := filepath.Ext(filePath)
+	proposedName := sanitizeFilename(title) + ext
+	if len(proposedName) > maxFilenameLength {
+		proposedName = proposedName[:maxFilenameLength-len(ext)] + ext
+	}
+
+	fmt.Printf("Rename file?\n  %s\n  -> %s\nProceed? [y/N]: ", filepath.Base(filePath), proposedName)
+	reader := bufio.NewReader(os.Stdin)
+	answer, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	return answer == "y" || answer == "yes"
 }
 
 // generateOpenAITitle sends the extracted PDF content to OpenAI's Chat Completion API
