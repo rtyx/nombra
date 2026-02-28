@@ -732,7 +732,7 @@ func generateOpenAITitle(content string, client *openai.Client, model string) (s
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,
-					Content: "You are a professional document curator. Carefully read the provided text and generate a concise filename describing the document.\n\n1. Identify the document type or category in plain language (e.g., Contract, Invoice, Report, Sublease Agreement, Pay Slip).\n2. Identify the main parties or entities involved.\n3. Find the most relevant date (creation, signing, effective, due) and format it as YYYY.MM.DD.\n4. Determine the core subject or topic if needed.\n\nConstruct the filename using these elements with the following priority:\n- If date, type, and parties are present: 'YYYY.MM.DD - [Document Type] - [Party1] - [Party2]'.\n- If date and type are found: 'YYYY.MM.DD - [Document Type] - [Subject or Party]'.\n- If type and parties are found (no clear date): '[Document Type] - [Party1] - [Party2]'.\n- If type and subject are found: '[Document Type] - [Subject]'.\n- If only the type is clear: '[Document Type] - [Key Detail or Subject]'.\n- As a last resort, output a short descriptive phrase summarizing the document.\n\nUse only standard characters (letters, numbers, spaces, hyphens). Keep the title concise and omit placeholder text. Respond only with the filename.\n\nExample: A document mentioning 'Untermietvertrag', 'John Doe', 'Jane Smith' and the date '7.5.2025' should yield '2025.05.07 - Sublease Agreement - John Doe - Jane Smith'. Another example: 'Invoice from ACME Corp dated 15 January 2024' should yield '2024.01.15 - Invoice - ACME Corp'.",
+					Content: "You are a professional document curator. Carefully read the provided text and generate a concise filename describing the document.\n\n1. Identify the document type or category in plain language (e.g., Contract, Invoice, Report, Sublease Agreement, Pay Slip).\n2. Identify the main parties or entities involved.\n3. Find the most relevant date (creation, signing, effective, due) and format it as YYYY.MM.DD.\n4. Determine the core subject or topic if needed.\n\nConstruct the filename using these elements with the following priority:\n- If date, type, and parties are present: 'YYYY.MM.DD - [Document Type] - [Party1] - [Party2]'.\n- If date and type are found: 'YYYY.MM.DD - [Document Type] - [Subject or Party]'.\n- If type and parties are found (no clear date): '[Document Type] - [Party1] - [Party2]'.\n- If type and subject are found: '[Document Type] - [Subject]'.\n- If only the type is clear: '[Document Type] - [Key Detail or Subject]'.\n- As a last resort, output a short descriptive phrase summarizing the document.\n\nIf a date is present anywhere in the filename, it must appear only at the beginning. Never place the date at the end; move it to the front instead.\n\nUse only standard characters (letters, numbers, spaces, hyphens). Keep the title concise and omit placeholder text. Respond only with the filename.\n\nExample: A document mentioning 'Untermietvertrag', 'John Doe', 'Jane Smith' and the date '7.5.2025' should yield '2025.05.07 - Sublease Agreement - John Doe - Jane Smith'. Another example: 'Invoice from ACME Corp dated 15 January 2024' should yield '2024.01.15 - Invoice - ACME Corp'.",
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
@@ -798,6 +798,34 @@ func cleanTitle(title string) string {
 	// Ensure dashes have a single space on each side
 	title = regexp.MustCompile(`\s*-\s*`).ReplaceAllString(title, " - ")
 
+	title = moveTrailingDateToFront(strings.TrimSpace(title))
+
 	// Trim any trailing or leading whitespace introduced by replacements
 	return strings.TrimSpace(title)
+}
+
+func moveTrailingDateToFront(title string) string {
+	datePattern := `\d{4}(?:\s*[./-]\s*)\d{2}(?:\s*[./-]\s*)\d{2}`
+	leadingDate := regexp.MustCompile(`^` + datePattern + `(?:\s+-\s+|$)`)
+	if leadingDate.MatchString(title) {
+		return title
+	}
+
+	trailingDate := regexp.MustCompile(`^(.*?)(?:\s+-\s+)(` + datePattern + `)$`)
+	matches := trailingDate.FindStringSubmatch(title)
+	if len(matches) != 3 {
+		return title
+	}
+
+	body := strings.TrimSpace(matches[1])
+	date := normalizeDateSeparators(matches[2])
+	if body == "" {
+		return date
+	}
+	return date + " - " + body
+}
+
+func normalizeDateSeparators(date string) string {
+	date = regexp.MustCompile(`\s*([./-])\s*`).ReplaceAllString(date, "$1")
+	return strings.NewReplacer("/", ".", "-", ".").Replace(date)
 }

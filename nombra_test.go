@@ -12,6 +12,8 @@ func TestCleanTitle(t *testing.T) {
 		" \"2024.03.31 -John Doe-Title\" \n": "2024.03.31 - John Doe - Title",
 		"FooBar":                             "Foo Bar",
 		"  Something-Else  ":                 "Something - Else",
+		"Taucher Medizincheck - Kandidaten - Fragebogen - 2020.10.31": "2020.10.31 - Taucher Medizincheck - Kandidaten - Fragebogen",
+		"Invoice - ACME Corp - 2024-01-15":                           "2024.01.15 - Invoice - ACME Corp",
 	}
 
 	for in, want := range cases {
