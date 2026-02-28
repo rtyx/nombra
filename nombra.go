@@ -732,7 +732,7 @@ func generateOpenAITitle(content string, client *openai.Client, model string) (s
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,
-					Content: "You are a professional document curator. Carefully read the provided text and generate a concise filename describing the document.\n\n1. Identify the document type or category in plain language (e.g., Contract, Invoice, Report, Sublease Agreement, Pay Slip).\n2. Identify the main parties or entities involved.\n3. Find the most relevant date (creation, signing, effective, due) and format it as YYYY.MM.DD.\n4. Determine the core subject or topic if needed.\n\nConstruct the filename using these elements with the following priority:\n- If date, type, and parties are present: 'YYYY.MM.DD - [Document Type] - [Party1] - [Party2]'.\n- If date and type are found: 'YYYY.MM.DD - [Document Type] - [Subject or Party]'.\n- If type and parties are found (no clear date): '[Document Type] - [Party1] - [Party2]'.\n- If type and subject are found: '[Document Type] - [Subject]'.\n- If only the type is clear: '[Document Type] - [Key Detail or Subject]'.\n- As a last resort, output a short descriptive phrase summarizing the document.\n\nIf a date is present anywhere in the filename, it must appear only at the beginning. Never place the date at the end; move it to the front instead.\n\nUse only standard characters (letters, numbers, spaces, hyphens). Keep the title concise and omit placeholder text. Respond only with the filename.\n\nExample: A document mentioning 'Untermietvertrag', 'John Doe', 'Jane Smith' and the date '7.5.2025' should yield '2025.05.07 - Sublease Agreement - John Doe - Jane Smith'. Another example: 'Invoice from ACME Corp dated 15 January 2024' should yield '2024.01.15 - Invoice - ACME Corp'.",
+					Content: "You generate filename stems for PDF documents.\n\nFirst, identify these fields from the document:\n- title: the explicit document title or heading, if present\n- author: who issued, authored, or signed the document\n- recipient: who the document is addressed to\n- topic: the main subject or purpose\n- date: the most relevant document date (creation, issue, signature, or effective date)\n\nUse these questions to guide extraction:\n- Who is authoring or issuing this document?\n- To whom is this document addressed?\n- What is the main topic?\n- Is there a visible title or heading?\n- What is the date the document was written or issued?\n\nThen produce exactly one filename stem and nothing else.\n\nFormatting rules:\n- If a date is used, it must appear only at the beginning as YYYY.MM.DD\n- Never place a date at the end; move it to the front instead\n- Prefer an explicit title when it is meaningful and specific\n- Otherwise prefer document type plus the most relevant people or entities\n- If author and recipient are both clear, include them when useful\n- If no clear document type exists, use the topic or title instead of inventing a type\n- Do not include quotes\n- Do not include a file extension\n- Do not explain your reasoning\n- Do not mention uncertainty\n- Do not write sentences like 'No clear document type...' or 'A descriptive filename could be...'\n- Use only letters, numbers, spaces, and hyphens\n- Keep the result concise\n\nUse the first matching pattern:\n- YYYY.MM.DD - [Title]\n- YYYY.MM.DD - [Document Type] - [Author] - [Recipient]\n- YYYY.MM.DD - [Document Type] - [Topic or Entity]\n- [Title]\n- [Document Type] - [Author] - [Recipient]\n- [Document Type] - [Topic]\n- [Topic]\n\nGood outputs:\n2025.05.07 - Sublease Agreement - John Doe - Jane Smith\n2024.01.15 - Invoice - ACME Corp\nResidence Permit Renewal\nMedical Questionnaire - Diving Fitness\n\nBad outputs:\nNo clear document type or parties are mentioned in the text\nA descriptive filename could be Residence Permit Renewal\nFilename: Residence Permit Renewal\nResidence Permit Renewal.pdf",
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
@@ -751,7 +751,50 @@ func generateOpenAITitle(content string, client *openai.Client, model string) (s
 		return "", fmt.Errorf("empty response from OpenAI API")
 	}
 
-	return cleanTitle(resp.Choices[0].Message.Content), nil
+	rawTitle := resp.Choices[0].Message.Content
+	title := cleanTitle(rawTitle)
+	if isLikelyFilename(title) {
+		return title, nil
+	}
+
+	repairedTitle, err := repairOpenAITitle(rawTitle, client, model)
+	if err != nil {
+		return "", err
+	}
+
+	title = cleanTitle(repairedTitle)
+	if !isLikelyFilename(title) {
+		return "", fmt.Errorf("model returned invalid filename output")
+	}
+
+	return title, nil
+}
+
+func repairOpenAITitle(rawTitle string, client *openai.Client, model string) (string, error) {
+	resp, err := client.CreateChatCompletion(
+		context.Background(),
+		openai.ChatCompletionRequest{
+			Model: model,
+			Messages: []openai.ChatCompletionMessage{
+				{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: "Rewrite the provided text as a filename only. Return only the filename. Do not explain, do not mention uncertainty, do not include quotes, and do not include a file extension. If a date is present, it must appear only at the beginning as YYYY.MM.DD.",
+				},
+				{
+					Role:    openai.ChatMessageRoleUser,
+					Content: rawTitle,
+				},
+			},
+			Temperature: 0,
+		},
+	)
+	if err != nil {
+		return "", fmt.Errorf("OpenAI repair error: %w", err)
+	}
+	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
+		return "", fmt.Errorf("empty response from OpenAI repair")
+	}
+	return resp.Choices[0].Message.Content, nil
 }
 
 // truncateContent shortens the input content if it exceeds the maximum allowed length,
@@ -798,10 +841,42 @@ func cleanTitle(title string) string {
 	// Ensure dashes have a single space on each side
 	title = regexp.MustCompile(`\s*-\s*`).ReplaceAllString(title, " - ")
 
+	title = regexp.MustCompile(`(?i)\.pdf$`).ReplaceAllString(title, "")
+
 	title = moveTrailingDateToFront(strings.TrimSpace(title))
 
 	// Trim any trailing or leading whitespace introduced by replacements
 	return strings.TrimSpace(title)
+}
+
+func isLikelyFilename(title string) bool {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return false
+	}
+
+	disallowedPhrases := []string{
+		"no clear",
+		"mentioned in the text",
+		"descriptive filename could be",
+		"filename should be",
+		"filename could be",
+		"document type",
+		"do not",
+		"respond only",
+	}
+	lowerTitle := strings.ToLower(title)
+	for _, phrase := range disallowedPhrases {
+		if strings.Contains(lowerTitle, phrase) {
+			return false
+		}
+	}
+
+	if strings.ContainsAny(title, "\n\r") {
+		return false
+	}
+
+	return !strings.Contains(title, ":")
 }
 
 func moveTrailingDateToFront(title string) string {
