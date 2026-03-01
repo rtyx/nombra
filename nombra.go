@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -41,8 +42,8 @@ const (
 	truncationSuffix  = "... [content truncated]"
 	sanitizeRegex     = `[<>:"\/\\|?*]`
 	visionModel       = openai.GPT4oMini
-	titlePrompt       = "You generate filename stems for PDF documents.\n\nFirst, identify these fields from the document:\n- date: the most relevant document date (creation, issue, signature, or effective date)\n- title: the explicit document title or heading, if present\n- document type: what this document actually is\n- author: who issued, authored, or signed the document\n- recipient: who the document is addressed to\n- topic: the main subject or purpose\n\nUse these questions to guide extraction:\n- What is the most relevant date in this document?\n- What is this document?\n- What does it look like it is for?\n- Is there a visible title or heading?\n- Who is authoring or issuing this document?\n- To whom is this document addressed?\n- What is the main topic?\n\nThen produce exactly one filename stem and nothing else.\n\nFormatting rules:\n- Always look for a relevant date first\n- If a relevant date exists anywhere in the document, include it at the beginning as YYYY.MM.DD\n- Never place a date at the end; move it to the front instead\n- Prefer an explicit title when it is meaningful and specific\n- If there is no useful title, identify what the document is and name that first\n- When there is no title, ask yourself: what is this, and what does it look like? Use the answer as the basis for the filename\n- Do not default to just listing person names when the document itself can be identified\n- Otherwise prefer document type plus the most relevant people or entities\n- If author and recipient are both clear, include them when useful\n- If no clear document type exists, use the topic or title instead of inventing a type\n- Do not include quotes\n- Do not include a file extension\n- Do not explain your reasoning\n- Do not mention uncertainty\n- Do not write sentences like 'No clear document type...' or 'A descriptive filename could be...'\n- Use only letters, numbers, spaces, and hyphens\n- Keep the result concise\n\nUse the first matching pattern:\n- YYYY.MM.DD - [Title]\n- YYYY.MM.DD - [Document Type] - [Author] - [Recipient]\n- YYYY.MM.DD - [Document Type] - [Topic or Entity]\n- [Title]\n- [Document Type] - [Author] - [Recipient]\n- [Document Type] - [Topic]\n- [Topic]\n\nGood outputs:\n2025.05.07 - Sublease Agreement - John Doe - Jane Smith\n2024.01.15 - Invoice - ACME Corp\n2020.10.31 - Medical Questionnaire - Diving Fitness\nResidence Permit Renewal\n\nBad outputs:\nNo clear document type or parties are mentioned in the text\nA descriptive filename could be Residence Permit Renewal\nFilename: Residence Permit Renewal\nResidence Permit Renewal.pdf\n2007.07.03 - Rafael Toledano Illan - Rafael Toledano Cantero"
-	retryTitlePrompt  = "You generate filename stems for PDF documents.\n\nThe previous filename attempt was invalid because it was too generic, explanatory, not filename-like, or focused on names instead of identifying the document. Re-read the document and try again with a different strategy.\n\nStrategy:\n- First, find the most relevant date in the document\n- If a relevant date exists, include it at the beginning as YYYY.MM.DD\n- Then ask: what is this document, and what does it look like it is for?\n- Prefer a specific visible title or heading if present\n- Otherwise identify the concrete document type, form, letter, certificate, permit, application, report, questionnaire, or other recognizable document kind\n- Only include person names after the document itself has been identified\n- Never return placeholders like Untitled, Document, File, Scan, Image, PDF, or Unknown\n- If the document is ambiguous, choose the most specific subject or document kind you can support from the text\n- Never place a date at the end\n\nReturn exactly one filename stem and nothing else.\nDo not explain your reasoning.\nDo not include quotes.\nDo not include a file extension.\nUse only letters, numbers, spaces, and hyphens."
+	extractionPrompt  = "You extract structured metadata from PDF documents for filename generation.\n\nRead the document and return exactly one JSON object with these keys:\n- date: most relevant date in YYYY.MM.DD format, or empty string\n- language: main language of the document, or empty string\n- title: explicit document title or heading, or empty string\n- document_type: what the document actually is, or empty string\n- organization: the institution, company, authority, or organization speaking or issuing the document, or empty string\n- author: the specific person who signed or authored it, or empty string\n- recipient: who it is addressed to, or empty string\n- topic: the main subject or purpose, or empty string\n\nQuestions to answer internally before filling the JSON:\n- What is the most relevant date in this document?\n- What is the main language of this document?\n- What is this document?\n- What does it look like it is for?\n- Is there a visible title or heading?\n- Which institution, company, authority, or organization is issuing or speaking in this document?\n- Which specific person signed or authored it?\n- Who is it addressed to?\n- What is the main topic?\n\nRules:\n- Use the main language of the document for title, document_type, organization, recipient, and topic\n- Do not translate field values into another language\n- Do not include bilingual duplicates like 'Bundesamt ... (Federal Office ...)' in one field\n- Prefer specific document kinds like permit, questionnaire, application, certificate, invoice, letter, report, contract, or form\n- Distinguish the organization from the individual signer when both are present\n- If there is no useful title, leave title empty instead of inventing one\n- Do not use placeholders like Untitled, Document, File, Unknown, Misc, or N A\n- Do not invent facts that are not supported by the text\n- Return JSON only, with no markdown and no explanation."
+	retryExtractionPrompt = "You previously extracted weak metadata for filename generation. Re-read the document and return a better JSON object.\n\nReturn exactly one JSON object with these keys:\n- date\n- language\n- title\n- document_type\n- organization\n- author\n- recipient\n- topic\n\nRules:\n- Find the most relevant date and format it as YYYY.MM.DD when possible\n- Keep all textual fields in the main language of the document\n- Do not translate values or mix languages in the same field\n- Do not include bilingual duplicates in parentheses or after dashes\n- Focus first on what the document actually is, not just which names appear in it\n- Distinguish the institution or company from the individual signer when both are present\n- If there is no title, identify the document kind or concrete subject\n- Only include person names after the document itself has been identified\n- Do not use placeholders like Untitled, Document, File, Unknown, Misc, or N A\n- Do not return markdown, prose, or explanations\n- Return JSON only."
 )
 
 var (
@@ -71,6 +72,17 @@ type fileResult struct {
 	newPath string
 	skipped bool
 	err     error
+}
+
+type extractedMetadata struct {
+	Date         string `json:"date"`
+	Language     string `json:"language"`
+	Title        string `json:"title"`
+	DocumentType string `json:"document_type"`
+	Organization string `json:"organization"`
+	Author       string `json:"author"`
+	Recipient    string `json:"recipient"`
+	Topic        string `json:"topic"`
 }
 
 // validModels lists the OpenAI models that can be used with the --model flag.
@@ -727,52 +739,28 @@ func generateOpenAITitle(content string, client *openai.Client, model string) (s
 		log.Println(content)
 	}
 
-	resp, err := client.CreateChatCompletion(
-		context.Background(),
-		openai.ChatCompletionRequest{
-			Model: model,
-			Messages: []openai.ChatCompletionMessage{
-				{
-					Role:    openai.ChatMessageRoleSystem,
-					Content: titlePrompt,
-				},
-				{
-					Role:    openai.ChatMessageRoleUser,
-					Content: content,
-				},
-			},
-			Temperature: 0.3,
-		},
-	)
-
-	if err != nil {
-		return "", fmt.Errorf("OpenAI API error: %w", err)
-	}
-
-	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
-		return "", fmt.Errorf("empty response from OpenAI API")
-	}
-
-	rawTitle := resp.Choices[0].Message.Content
-	title := cleanTitle(rawTitle)
-	if isLikelyFilename(title) {
-		return title, nil
-	}
-
-	repairedTitle, err := retryOpenAITitle(content, rawTitle, client, model)
+	metadata, err := extractMetadata(content, client, model, extractionPrompt, "")
 	if err != nil {
 		return "", err
 	}
+	title, ok := buildTitleFromMetadata(metadata)
+	if ok {
+		return title, nil
+	}
 
-	title = cleanTitle(repairedTitle)
-	if !isLikelyFilename(title) {
-		return "", fmt.Errorf("model returned invalid filename output")
+	metadata, err = extractMetadata(content, client, model, retryExtractionPrompt, weakMetadataReason(metadata))
+	if err != nil {
+		return "", err
+	}
+	title, ok = buildTitleFromMetadata(metadata)
+	if !ok {
+		return "", fmt.Errorf("model returned insufficient metadata for filename generation")
 	}
 
 	return title, nil
 }
 
-func retryOpenAITitle(content, rejectedTitle string, client *openai.Client, model string) (string, error) {
+func extractMetadata(content string, client *openai.Client, model, prompt, feedback string) (extractedMetadata, error) {
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
@@ -780,23 +768,61 @@ func retryOpenAITitle(content, rejectedTitle string, client *openai.Client, mode
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,
-					Content: retryTitlePrompt,
+					Content: prompt,
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
-					Content: fmt.Sprintf("Rejected filename: %s\n\nDocument text:\n%s", rejectedTitle, content),
+					Content: buildMetadataRequest(content, feedback),
 				},
 			},
 			Temperature: 0,
 		},
 	)
 	if err != nil {
-		return "", fmt.Errorf("OpenAI retry error: %w", err)
+		return extractedMetadata{}, fmt.Errorf("OpenAI metadata extraction error: %w", err)
 	}
 	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
-		return "", fmt.Errorf("empty response from OpenAI retry")
+		return extractedMetadata{}, fmt.Errorf("empty response from OpenAI metadata extraction")
 	}
-	return resp.Choices[0].Message.Content, nil
+
+	metadata, err := parseMetadataResponse(resp.Choices[0].Message.Content)
+	if err != nil {
+		return extractedMetadata{}, err
+	}
+
+	return normalizeMetadata(metadata), nil
+}
+
+func buildMetadataRequest(content, feedback string) string {
+	if strings.TrimSpace(feedback) == "" {
+		return content
+	}
+	return fmt.Sprintf("Previous extraction was weak for this reason: %s\n\nDocument text:\n%s", feedback, content)
+}
+
+func parseMetadataResponse(raw string) (extractedMetadata, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return extractedMetadata{}, fmt.Errorf("empty metadata response")
+	}
+
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
+
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start == -1 || end == -1 || end < start {
+		return extractedMetadata{}, fmt.Errorf("metadata response did not contain JSON object")
+	}
+
+	var metadata extractedMetadata
+	if err := json.Unmarshal([]byte(raw[start:end+1]), &metadata); err != nil {
+		return extractedMetadata{}, fmt.Errorf("invalid metadata JSON: %w", err)
+	}
+
+	return metadata, nil
 }
 
 // truncateContent shortens the input content if it exceeds the maximum allowed length,
@@ -825,6 +851,316 @@ func truncateContent(content string) string {
 	return start + truncationSuffix + end
 }
 
+func normalizeMetadata(metadata extractedMetadata) extractedMetadata {
+	metadata.Date = normalizeDateSeparators(strings.TrimSpace(metadata.Date))
+	metadata.Language = strings.TrimSpace(metadata.Language)
+	metadata.Title = normalizeMetadataField(metadata.Title)
+	metadata.DocumentType = normalizeMetadataField(metadata.DocumentType)
+	metadata.Organization = normalizeOrganizationField(metadata.Organization)
+	metadata.Author = normalizeMetadataField(metadata.Author)
+	metadata.Recipient = normalizeMetadataField(metadata.Recipient)
+	metadata.Topic = normalizeMetadataField(metadata.Topic)
+	return metadata
+}
+
+func normalizeMetadataField(value string) string {
+	value = stripTrailingTranslation(value)
+	value = cleanTitle(value)
+	if isGenericMetadataValue(value) {
+		return ""
+	}
+	return value
+}
+
+func normalizeOrganizationField(value string) string {
+	value = stripTrailingTranslation(value)
+	value = cleanTitle(value)
+	if isGenericMetadataValue(value) {
+		return ""
+	}
+	return shortenDescriptor(value, 42)
+}
+
+func weakMetadataReason(metadata extractedMetadata) string {
+	reasons := []string{}
+	if metadata.Date == "" {
+		reasons = append(reasons, "no relevant date found")
+	}
+	if metadata.Title == "" && metadata.DocumentType == "" && metadata.Topic == "" {
+		reasons = append(reasons, "document identity is missing")
+	}
+	if metadata.Title == "" && metadata.DocumentType == "" && metadata.Topic != "" && metadata.Author != "" && metadata.Recipient != "" {
+		reasons = append(reasons, "extraction overfocused on names instead of document kind")
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "metadata was too weak to build a reliable filename")
+	}
+	return strings.Join(reasons, "; ")
+}
+
+func buildTitleFromMetadata(metadata extractedMetadata) (string, bool) {
+	metadata = normalizeMetadata(metadata)
+	parts := []string{}
+
+	date := metadata.Date
+	if looksLikeDate(date) {
+		parts = append(parts, date)
+	}
+
+	primary := selectPrimaryDescriptor(metadata)
+	if !hasMeaningfulDescriptor(primary) {
+		return "", false
+	}
+	parts = append(parts, shortenDescriptor(primary, 54))
+
+	for _, extra := range selectSecondaryDescriptors(metadata, primary) {
+		if !hasMeaningfulDescriptor(extra) {
+			continue
+		}
+		if containsFold(parts, extra) {
+			continue
+		}
+		if descriptorOverlaps(primary, extra) {
+			continue
+		}
+		parts = append(parts, shortenDescriptor(extra, descriptorLimit(extra, metadata)))
+		if len(parts) >= 4 {
+			break
+		}
+	}
+
+	title := compactTitle(strings.Join(parts, " - "))
+	if !isLikelyFilename(title) {
+		return "", false
+	}
+	return title, true
+}
+
+func selectPrimaryDescriptor(metadata extractedMetadata) string {
+	switch {
+	case hasMeaningfulDescriptor(metadata.Title) && !isVerboseTitle(metadata.Title, metadata.DocumentType, metadata.Topic):
+		return metadata.Title
+	case hasMeaningfulDescriptor(metadata.DocumentType):
+		return metadata.DocumentType
+	case hasMeaningfulDescriptor(metadata.Title):
+		return metadata.Title
+	case hasMeaningfulDescriptor(metadata.Topic):
+		return metadata.Topic
+	default:
+		return ""
+	}
+}
+
+func selectSecondaryDescriptors(metadata extractedMetadata, primary string) []string {
+	extras := []string{}
+
+	if hasMeaningfulDescriptor(metadata.Organization) && !descriptorOverlaps(primary, metadata.Organization) {
+		extras = append(extras, metadata.Organization)
+	}
+
+	if metadata.Organization == "" &&
+		hasMeaningfulDescriptor(metadata.Author) &&
+		!descriptorOverlaps(primary, metadata.Author) &&
+		!containsFold(extras, metadata.Author) {
+		extras = append(extras, metadata.Author)
+	}
+
+	if hasMeaningfulDescriptor(metadata.Recipient) && !descriptorOverlaps(primary, metadata.Recipient) {
+		extras = append(extras, metadata.Recipient)
+	}
+
+	if hasMeaningfulDescriptor(metadata.Topic) &&
+		!descriptorOverlaps(primary, metadata.Topic) &&
+		!descriptorOverlaps(metadata.DocumentType, metadata.Topic) &&
+		isConciseDescriptor(metadata.Topic) {
+		extras = append(extras, metadata.Topic)
+	}
+
+	return extras
+}
+
+func descriptorLimit(value string, metadata extractedMetadata) int {
+	switch {
+	case strings.EqualFold(value, metadata.Organization):
+		return 42
+	case strings.EqualFold(value, metadata.Recipient):
+		return 30
+	case strings.EqualFold(value, metadata.Author):
+		return 28
+	default:
+		return 34
+	}
+}
+
+func compactTitle(title string) string {
+	title = cleanTitle(title)
+	title = removeOverlappingParts(title)
+	if len(title) <= maxFilenameLength {
+		return title
+	}
+
+	parts := strings.Split(title, " - ")
+	for len(parts) > 2 {
+		removed := false
+		for i := len(parts) - 1; i >= 2; i-- {
+			candidate := cleanTitle(strings.Join(append(append([]string{}, parts[:i]...), parts[i+1:]...), " - "))
+			if len(candidate) < len(title) {
+				title = candidate
+				parts = strings.Split(title, " - ")
+				removed = true
+				if len(title) <= maxFilenameLength {
+					return title
+				}
+				break
+			}
+		}
+		if !removed {
+			break
+		}
+	}
+
+	if len(title) > maxFilenameLength {
+		title = title[:maxFilenameLength]
+		title = strings.TrimSpace(strings.TrimSuffix(title, "-"))
+	}
+	return cleanTitle(title)
+}
+
+func removeOverlappingParts(title string) string {
+	parts := strings.Split(title, " - ")
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		skip := false
+		for _, existing := range filtered {
+			if descriptorOverlaps(existing, part) {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			filtered = append(filtered, part)
+		}
+	}
+	return cleanTitle(strings.Join(filtered, " - "))
+}
+
+func descriptorOverlaps(a, b string) bool {
+	a = strings.ToLower(strings.TrimSpace(a))
+	b = strings.ToLower(strings.TrimSpace(b))
+	if a == "" || b == "" {
+		return false
+	}
+	return strings.Contains(a, b) || strings.Contains(b, a)
+}
+
+func isVerboseTitle(title, documentType, topic string) bool {
+	if !hasMeaningfulDescriptor(title) {
+		return false
+	}
+	if len(title) > 55 && hasMeaningfulDescriptor(documentType) {
+		return true
+	}
+	return descriptorOverlaps(title, topic) && len(title) > 45 && hasMeaningfulDescriptor(documentType)
+}
+
+func isConciseDescriptor(value string) bool {
+	return len(strings.TrimSpace(value)) <= 40
+}
+
+func stripTrailingTranslation(value string) string {
+	value = strings.TrimSpace(value)
+	matches := regexp.MustCompile(`^(.*?)\s+\(([^()]*)\)$`).FindStringSubmatch(value)
+	if len(matches) != 3 {
+		return value
+	}
+
+	base := strings.TrimSpace(matches[1])
+	translated := strings.TrimSpace(matches[2])
+	if base == "" || translated == "" {
+		return value
+	}
+
+	if descriptorOverlaps(base, translated) || likelyTranslatedDuplicate(base, translated) {
+		return base
+	}
+
+	return value
+}
+
+func likelyTranslatedDuplicate(base, translated string) bool {
+	return len(translated) > 12 && (containsNonASCII(base) || containsAcronym(base) || len(strings.Fields(base)) >= 3)
+}
+
+func containsNonASCII(value string) bool {
+	for _, r := range value {
+		if r > 127 {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAcronym(value string) bool {
+	return regexp.MustCompile(`\b[A-Z]{2,}\b`).MatchString(value)
+}
+
+func shortenDescriptor(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+
+	words := strings.Fields(value)
+	if len(words) == 0 {
+		return value[:limit]
+	}
+
+	var parts []string
+	current := 0
+	for _, word := range words {
+		added := len(word)
+		if len(parts) > 0 {
+			added++
+		}
+		if current+added > limit {
+			break
+		}
+		parts = append(parts, word)
+		current += added
+	}
+	if len(parts) == 0 {
+		return strings.TrimSpace(value[:limit])
+	}
+	return strings.Join(parts, " ")
+}
+
+func hasMeaningfulDescriptor(value string) bool {
+	value = strings.TrimSpace(value)
+	return value != "" && !isGenericMetadataValue(value)
+}
+
+func isGenericMetadataValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "untitled", "document", "file", "pdf", "scan", "scanned document", "image", "unknown", "misc", "miscellaneous", "n a", "na", "none":
+		return true
+	default:
+		return false
+	}
+}
+
+func containsFold(values []string, candidate string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeDate(value string) bool {
+	return regexp.MustCompile(`^\d{4}\.\d{2}\.\d{2}$`).MatchString(strings.TrimSpace(value))
+}
+
 // cleanTitle cleans and formats the generated title by removing extraneous quotes and whitespace,
 // normalizing spacing around dashes, and ensuring proper text formatting.
 func cleanTitle(title string) string {
@@ -837,11 +1173,17 @@ func cleanTitle(title string) string {
 	// Insert spaces between a lowercase letter followed immediately by an uppercase letter
 	title = regexp.MustCompile(`([a-z])([A-Z])`).ReplaceAllString(title, "$1 $2")
 
+	// Treat missing-space separators like "Name-Title" as section separators.
+	title = regexp.MustCompile(`([[:lower:]])-([[:upper:]][[:lower:]])`).ReplaceAllString(title, "$1 - $2")
+
 	// Collapse runs of whitespace
 	title = regexp.MustCompile(`\s+`).ReplaceAllString(title, " ")
 
-	// Ensure dashes have a single space on each side
-	title = regexp.MustCompile(`\s*-\s*`).ReplaceAllString(title, " - ")
+	// Ensure explicit separator dashes have a single space on each side without
+	// touching hyphens inside words like "COVID-19" or "COVID-Zertifikat".
+	title = regexp.MustCompile(`\s+-\s+`).ReplaceAllString(title, " - ")
+	title = regexp.MustCompile(`\s-\s*`).ReplaceAllString(title, " - ")
+	title = regexp.MustCompile(`\s*-\s`).ReplaceAllString(title, " - ")
 
 	title = regexp.MustCompile(`(?i)\.pdf$`).ReplaceAllString(title, "")
 
