@@ -41,6 +41,8 @@ const (
 	truncationSuffix  = "... [content truncated]"
 	sanitizeRegex     = `[<>:"\/\\|?*]`
 	visionModel       = openai.GPT4oMini
+	titlePrompt       = "You generate filename stems for PDF documents.\n\nFirst, identify these fields from the document:\n- title: the explicit document title or heading, if present\n- document type: what this document actually is\n- author: who issued, authored, or signed the document\n- recipient: who the document is addressed to\n- topic: the main subject or purpose\n- date: the most relevant document date (creation, issue, signature, or effective date)\n\nUse these questions to guide extraction:\n- What is this document?\n- What does it look like it is for?\n- Is there a visible title or heading?\n- Who is authoring or issuing this document?\n- To whom is this document addressed?\n- What is the main topic?\n- What is the date the document was written or issued?\n\nThen produce exactly one filename stem and nothing else.\n\nFormatting rules:\n- If a date is used, it must appear only at the beginning as YYYY.MM.DD\n- Never place a date at the end; move it to the front instead\n- Prefer an explicit title when it is meaningful and specific\n- If there is no useful title, identify what the document is and name that first\n- When there is no title, ask yourself: what is this, and what does it look like? Use the answer as the basis for the filename\n- Do not default to just listing person names when the document itself can be identified\n- Otherwise prefer document type plus the most relevant people or entities\n- If author and recipient are both clear, include them when useful\n- If no clear document type exists, use the topic or title instead of inventing a type\n- Do not include quotes\n- Do not include a file extension\n- Do not explain your reasoning\n- Do not mention uncertainty\n- Do not write sentences like 'No clear document type...' or 'A descriptive filename could be...'\n- Use only letters, numbers, spaces, and hyphens\n- Keep the result concise\n\nUse the first matching pattern:\n- YYYY.MM.DD - [Title]\n- YYYY.MM.DD - [Document Type] - [Author] - [Recipient]\n- YYYY.MM.DD - [Document Type] - [Topic or Entity]\n- [Title]\n- [Document Type] - [Author] - [Recipient]\n- [Document Type] - [Topic]\n- [Topic]\n\nGood outputs:\n2025.05.07 - Sublease Agreement - John Doe - Jane Smith\n2024.01.15 - Invoice - ACME Corp\nResidence Permit Renewal\nMedical Questionnaire - Diving Fitness\n\nBad outputs:\nNo clear document type or parties are mentioned in the text\nA descriptive filename could be Residence Permit Renewal\nFilename: Residence Permit Renewal\nResidence Permit Renewal.pdf\n2007.07.03 - Rafael Toledano Illan - Rafael Toledano Cantero"
+	retryTitlePrompt  = "You generate filename stems for PDF documents.\n\nThe previous filename attempt was invalid because it was too generic, explanatory, not filename-like, or focused on names instead of identifying the document. Re-read the document and try again with a different strategy.\n\nStrategy:\n- First ask: what is this document, and what does it look like it is for?\n- Prefer a specific visible title or heading if present\n- Otherwise identify the concrete document type, form, letter, certificate, permit, application, report, questionnaire, or other recognizable document kind\n- Only include person names after the document itself has been identified\n- Never return placeholders like Untitled, Document, File, Scan, Image, PDF, or Unknown\n- If the document is ambiguous, choose the most specific subject or document kind you can support from the text\n- If a date is present, it must appear only at the beginning as YYYY.MM.DD\n- Never place a date at the end\n\nReturn exactly one filename stem and nothing else.\nDo not explain your reasoning.\nDo not include quotes.\nDo not include a file extension.\nUse only letters, numbers, spaces, and hyphens."
 )
 
 var (
@@ -732,7 +734,7 @@ func generateOpenAITitle(content string, client *openai.Client, model string) (s
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,
-					Content: "You generate filename stems for PDF documents.\n\nFirst, identify these fields from the document:\n- title: the explicit document title or heading, if present\n- author: who issued, authored, or signed the document\n- recipient: who the document is addressed to\n- topic: the main subject or purpose\n- date: the most relevant document date (creation, issue, signature, or effective date)\n\nUse these questions to guide extraction:\n- Who is authoring or issuing this document?\n- To whom is this document addressed?\n- What is the main topic?\n- Is there a visible title or heading?\n- What is the date the document was written or issued?\n\nThen produce exactly one filename stem and nothing else.\n\nFormatting rules:\n- If a date is used, it must appear only at the beginning as YYYY.MM.DD\n- Never place a date at the end; move it to the front instead\n- Prefer an explicit title when it is meaningful and specific\n- Otherwise prefer document type plus the most relevant people or entities\n- If author and recipient are both clear, include them when useful\n- If no clear document type exists, use the topic or title instead of inventing a type\n- Do not include quotes\n- Do not include a file extension\n- Do not explain your reasoning\n- Do not mention uncertainty\n- Do not write sentences like 'No clear document type...' or 'A descriptive filename could be...'\n- Use only letters, numbers, spaces, and hyphens\n- Keep the result concise\n\nUse the first matching pattern:\n- YYYY.MM.DD - [Title]\n- YYYY.MM.DD - [Document Type] - [Author] - [Recipient]\n- YYYY.MM.DD - [Document Type] - [Topic or Entity]\n- [Title]\n- [Document Type] - [Author] - [Recipient]\n- [Document Type] - [Topic]\n- [Topic]\n\nGood outputs:\n2025.05.07 - Sublease Agreement - John Doe - Jane Smith\n2024.01.15 - Invoice - ACME Corp\nResidence Permit Renewal\nMedical Questionnaire - Diving Fitness\n\nBad outputs:\nNo clear document type or parties are mentioned in the text\nA descriptive filename could be Residence Permit Renewal\nFilename: Residence Permit Renewal\nResidence Permit Renewal.pdf",
+					Content: titlePrompt,
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
@@ -757,7 +759,7 @@ func generateOpenAITitle(content string, client *openai.Client, model string) (s
 		return title, nil
 	}
 
-	repairedTitle, err := repairOpenAITitle(rawTitle, client, model)
+	repairedTitle, err := retryOpenAITitle(content, rawTitle, client, model)
 	if err != nil {
 		return "", err
 	}
@@ -770,7 +772,7 @@ func generateOpenAITitle(content string, client *openai.Client, model string) (s
 	return title, nil
 }
 
-func repairOpenAITitle(rawTitle string, client *openai.Client, model string) (string, error) {
+func retryOpenAITitle(content, rejectedTitle string, client *openai.Client, model string) (string, error) {
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
@@ -778,21 +780,21 @@ func repairOpenAITitle(rawTitle string, client *openai.Client, model string) (st
 			Messages: []openai.ChatCompletionMessage{
 				{
 					Role:    openai.ChatMessageRoleSystem,
-					Content: "Rewrite the provided text as a filename only. Return only the filename. Do not explain, do not mention uncertainty, do not include quotes, and do not include a file extension. If a date is present, it must appear only at the beginning as YYYY.MM.DD.",
+					Content: retryTitlePrompt,
 				},
 				{
 					Role:    openai.ChatMessageRoleUser,
-					Content: rawTitle,
+					Content: fmt.Sprintf("Rejected filename: %s\n\nDocument text:\n%s", rejectedTitle, content),
 				},
 			},
 			Temperature: 0,
 		},
 	)
 	if err != nil {
-		return "", fmt.Errorf("OpenAI repair error: %w", err)
+		return "", fmt.Errorf("OpenAI retry error: %w", err)
 	}
 	if len(resp.Choices) == 0 || resp.Choices[0].Message.Content == "" {
-		return "", fmt.Errorf("empty response from OpenAI repair")
+		return "", fmt.Errorf("empty response from OpenAI retry")
 	}
 	return resp.Choices[0].Message.Content, nil
 }
@@ -865,7 +867,22 @@ func isLikelyFilename(title string) bool {
 		"do not",
 		"respond only",
 	}
+	disallowedTitles := map[string]struct{}{
+		"untitled":         {},
+		"document":         {},
+		"file":             {},
+		"pdf":              {},
+		"scan":             {},
+		"scanned document": {},
+		"image":            {},
+		"unknown":          {},
+		"misc":             {},
+		"miscellaneous":    {},
+	}
 	lowerTitle := strings.ToLower(title)
+	if _, found := disallowedTitles[lowerTitle]; found {
+		return false
+	}
 	for _, phrase := range disallowedPhrases {
 		if strings.Contains(lowerTitle, phrase) {
 			return false

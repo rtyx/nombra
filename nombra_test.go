@@ -29,6 +29,8 @@ func TestIsLikelyFilename(t *testing.T) {
 	cases := map[string]bool{
 		"2024.01.15 - Invoice - ACME Corp": true,
 		"Residence Permit Renew":           true,
+		"Untitled":                         false,
+		"Document":                         false,
 		"No clear document type or parties are mentioned in the text. A descriptive filename could be 'Residence Permit Renew": false,
 		"The filename should be: Residence Permit Renewal": false,
 		"Filename: Residence Permit Renewal":              false,
