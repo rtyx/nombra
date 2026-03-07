@@ -106,10 +106,17 @@ Use interactive mode to approve the rename before applying it:
 Note: `--interactive` currently supports a single input file at a time.
 
 ### Selecting an OpenAI model
-By default, Nombra uses `gpt-3.5-turbo` for title generation. You can choose a
+By default, Nombra uses `gpt-5.4` for title generation. You can choose a
 different model with the `--model` flag:
 ```sh
-./nombra myfile.pdf --model gpt-4-turbo
+./nombra myfile.pdf --model gpt-5.4-pro
+```
+
+### Setting Reasoning Effort (GPT-5 family)
+You can control GPT-5 reasoning depth with `--reasoning-effort`:
+```sh
+./nombra myfile.pdf --reasoning-effort none
+./nombra myfile.pdf --reasoning-effort medium
 ```
 
 ### Checking the Version

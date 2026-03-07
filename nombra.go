@@ -38,11 +38,12 @@ import (
 )
 
 const (
-	maxFilenameLength = 120
-	truncationSuffix  = "... [content truncated]"
-	sanitizeRegex     = `[<>:"\/\\|?*]`
-	visionModel       = openai.GPT4oMini
-	extractionPrompt  = "You extract structured metadata from PDF documents for filename generation.\n\nRead the document and return exactly one JSON object with these keys:\n- date: most relevant date in YYYY.MM.DD format, or empty string\n- language: main language of the document, or empty string\n- title: explicit document title or heading, or empty string\n- document_type: what the document actually is, or empty string\n- organization: the institution, company, authority, or organization speaking or issuing the document, or empty string\n- author: the specific person who signed or authored it, or empty string\n- recipient: who it is addressed to, or empty string\n- topic: the main subject or purpose, or empty string\n\nQuestions to answer internally before filling the JSON:\n- What is the most relevant date in this document?\n- What is the main language of this document?\n- What is this document?\n- What does it look like it is for?\n- Is there a visible title or heading?\n- Which institution, company, authority, or organization is issuing or speaking in this document?\n- Which specific person signed or authored it?\n- Who is it addressed to?\n- What is the main topic?\n\nRules:\n- Use the main language of the document for title, document_type, organization, recipient, and topic\n- Do not translate field values into another language\n- Do not include bilingual duplicates like 'Bundesamt ... (Federal Office ...)' in one field\n- Prefer specific document kinds like permit, questionnaire, application, certificate, invoice, letter, report, contract, or form\n- Distinguish the organization from the individual signer when both are present\n- If there is no useful title, leave title empty instead of inventing one\n- Do not use placeholders like Untitled, Document, File, Unknown, Misc, or N A\n- Do not invent facts that are not supported by the text\n- Return JSON only, with no markdown and no explanation."
+	maxFilenameLength     = 120
+	truncationSuffix      = "... [content truncated]"
+	sanitizeRegex         = `[<>:"\/\\|?*]`
+	defaultModel          = "gpt-5.4"
+	visionModel           = openai.GPT4oMini
+	extractionPrompt      = "You extract structured metadata from PDF documents for filename generation.\n\nRead the document and return exactly one JSON object with these keys:\n- date: most relevant date in YYYY.MM.DD format, or empty string\n- language: main language of the document, or empty string\n- title: explicit document title or heading, or empty string\n- document_type: what the document actually is, or empty string\n- organization: the institution, company, authority, or organization speaking or issuing the document, or empty string\n- author: the specific person who signed or authored it, or empty string\n- recipient: who it is addressed to, or empty string\n- topic: the main subject or purpose, or empty string\n\nQuestions to answer internally before filling the JSON:\n- What is the most relevant date in this document?\n- What is the main language of this document?\n- What is this document?\n- What does it look like it is for?\n- Is there a visible title or heading?\n- Which institution, company, authority, or organization is issuing or speaking in this document?\n- Which specific person signed or authored it?\n- Who is it addressed to?\n- What is the main topic?\n\nRules:\n- Use the main language of the document for title, document_type, organization, recipient, and topic\n- Do not translate field values into another language\n- Do not include bilingual duplicates like 'Bundesamt ... (Federal Office ...)' in one field\n- Prefer specific document kinds like permit, questionnaire, application, certificate, invoice, letter, report, contract, or form\n- Distinguish the organization from the individual signer when both are present\n- If there is no useful title, leave title empty instead of inventing one\n- Do not use placeholders like Untitled, Document, File, Unknown, Misc, or N A\n- Do not invent facts that are not supported by the text\n- Return JSON only, with no markdown and no explanation."
 	retryExtractionPrompt = "You previously extracted weak metadata for filename generation. Re-read the document and return a better JSON object.\n\nReturn exactly one JSON object with these keys:\n- date\n- language\n- title\n- document_type\n- organization\n- author\n- recipient\n- topic\n\nRules:\n- Find the most relevant date and format it as YYYY.MM.DD when possible\n- Keep all textual fields in the main language of the document\n- Do not translate values or mix languages in the same field\n- Do not include bilingual duplicates in parentheses or after dashes\n- Focus first on what the document actually is, not just which names appear in it\n- Distinguish the institution or company from the individual signer when both are present\n- If there is no title, identify the document kind or concrete subject\n- Only include person names after the document itself has been identified\n- Do not use placeholders like Untitled, Document, File, Unknown, Misc, or N A\n- Do not return markdown, prose, or explanations\n- Return JSON only."
 )
 
@@ -58,6 +59,7 @@ var (
 	interactive      bool
 	workers          int
 	inputDir         string
+	reasoningEffort  string
 )
 
 type fileJob struct {
@@ -89,6 +91,11 @@ type extractedMetadata struct {
 // The slice is used for validating user input and constructing helpful error
 // messages when an unsupported model is supplied.
 var validModels = []string{
+	"gpt-5.4",
+	"gpt-5.4-pro",
+	"gpt-5-mini",
+	"gpt-5-nano",
+	"gpt-5-chat-latest",
 	openai.GPT3Dot5Turbo,
 	openai.GPT3Dot5Turbo0125,
 	openai.GPT3Dot5Turbo1106,
@@ -104,6 +111,14 @@ var validModels = []string{
 	openai.GPT4VisionPreview,
 }
 
+var validReasoningEfforts = map[string]struct{}{
+	"none":   {},
+	"low":    {},
+	"medium": {},
+	"high":   {},
+	"xhigh":  {},
+}
+
 // validateModel ensures the provided model is one of the supported values.
 // It returns an error listing the allowed models when validation fails.
 func validateModel(m string) error {
@@ -113,6 +128,20 @@ func validateModel(m string) error {
 		}
 	}
 	return fmt.Errorf("invalid model %q. valid models: %s", m, strings.Join(validModels, ", "))
+}
+
+func validateReasoningEffort(effort string) error {
+	e := strings.TrimSpace(strings.ToLower(effort))
+	if _, ok := validReasoningEfforts[e]; ok {
+		return nil
+	}
+
+	allowed := []string{"none", "low", "medium", "high", "xhigh"}
+	return fmt.Errorf("invalid reasoning effort %q. valid values: %s", effort, strings.Join(allowed, ", "))
+}
+
+func isGPT5Model(name string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(name)), "gpt-5")
 }
 
 // main initializes and executes the CLI command for generating a title for a PDF file.
@@ -125,7 +154,7 @@ func main() {
 		Use:     "nombra [PDF file ...]",
 		Short:   "Generate titles for PDF documents using AI",
 		Long:    "A CLI tool that analyzes PDF content and generates appropriate titles using OpenAI's API",
-		Example: "nombra myfile.pdf\n  nombra myfile1.pdf myfile2.pdf --workers 4\n  nombra --dir ./docs --workers 6\n  nombra myfile.pdf --model gpt-4-turbo",
+		Example: "nombra myfile.pdf\n  nombra myfile1.pdf myfile2.pdf --workers 4\n  nombra --dir ./docs --workers 6\n  nombra myfile.pdf --model gpt-5.4",
 		Version: version,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 && strings.TrimSpace(inputDir) == "" {
@@ -154,6 +183,10 @@ func main() {
 				os.Exit(1)
 			}
 			if err := validateModel(model); err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+			if err := validateReasoningEffort(reasoningEffort); err != nil {
 				fmt.Println(err)
 				os.Exit(1)
 			}
@@ -223,7 +256,8 @@ func main() {
 	// Configure flags
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose logging")
 	rootCmd.PersistentFlags().BoolVarP(&ocr, "ocr", "o", false, "Force OCR text extraction")
-	rootCmd.PersistentFlags().StringVarP(&model, "model", "m", openai.GPT3Dot5Turbo, "OpenAI model to use")
+	rootCmd.PersistentFlags().StringVarP(&model, "model", "m", defaultModel, "OpenAI model to use")
+	rootCmd.PersistentFlags().StringVar(&reasoningEffort, "reasoning-effort", "none", "Reasoning effort for GPT-5 models: none, low, medium, high, xhigh")
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview the new filename without renaming")
 	rootCmd.Flags().BoolVar(&printOnly, "print-only", false, "Print only the generated title")
 	rootCmd.Flags().BoolVarP(&interactive, "interactive", "i", false, "Ask for confirmation before renaming")
@@ -761,22 +795,33 @@ func generateOpenAITitle(content string, client *openai.Client, model string) (s
 }
 
 func extractMetadata(content string, client *openai.Client, model, prompt, feedback string) (extractedMetadata, error) {
+	req := openai.ChatCompletionRequest{
+		Model: model,
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: prompt,
+			},
+			{
+				Role:    openai.ChatMessageRoleUser,
+				Content: buildMetadataRequest(content, feedback),
+			},
+		},
+	}
+
+	if isGPT5Model(model) {
+		req.ReasoningEffort = strings.ToLower(reasoningEffort)
+		// GPT-5.4 supports temperature/top_p only when reasoning effort is "none".
+		if strings.EqualFold(reasoningEffort, "none") {
+			req.Temperature = 0
+		}
+	} else {
+		req.Temperature = 0
+	}
+
 	resp, err := client.CreateChatCompletion(
 		context.Background(),
-		openai.ChatCompletionRequest{
-			Model: model,
-			Messages: []openai.ChatCompletionMessage{
-				{
-					Role:    openai.ChatMessageRoleSystem,
-					Content: prompt,
-				},
-				{
-					Role:    openai.ChatMessageRoleUser,
-					Content: buildMetadataRequest(content, feedback),
-				},
-			},
-			Temperature: 0,
-		},
+		req,
 	)
 	if err != nil {
 		return extractedMetadata{}, fmt.Errorf("OpenAI metadata extraction error: %w", err)
